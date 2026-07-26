@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
 
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/embed"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/gwurl"
 )
 
@@ -105,7 +109,34 @@ func thousands(n int64) string {
 
 // Usage fetches /stats and prints the efficiency report. Returns exit code.
 func Usage(w io.Writer, args []string) int {
-	base := gwurl.URLFromEnv()
+	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
+	fs.SetOutput(w)
+	var mf ModeFlags
+	mf.Register(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	mode, base, err := mf.Resolve()
+	if err != nil {
+		fmt.Fprintf(w, "error: %v\n", err)
+		return 2
+	}
+	if mode == gwurl.ModeEmbedded {
+		paths, err := chome.Resolve()
+		if err != nil {
+			fmt.Fprintf(w, "error: %v\n", err)
+			return 1
+		}
+		inst, err := embed.Start(context.Background(), embed.Config{Paths: paths})
+		if err != nil {
+			fmt.Fprintf(w, "error: start embedded gateway: %v\n", err)
+			return 1
+		}
+		defer inst.Close()
+		base = inst.BaseURL
+	}
+
 	var s statsResp
 	if err := fetchJSON(base+"/stats", &s); err != nil {
 		fmt.Fprintf(w, "gateway: UNREACHABLE at %s (%v)\n", base, err)
