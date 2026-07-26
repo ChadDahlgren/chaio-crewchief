@@ -43,11 +43,25 @@ func Host() string {
 	return h
 }
 
+// EnsureDir creates lockDir if it is missing.
+//
+// Callers reap before they acquire (see the ordering note on OwnerAlive) and so
+// cannot rely on Acquire to create the directory for them. It matters: a
+// missing lockDir makes OwnerAlive answer "unsure, assume alive" for every pid,
+// which would silently reap nothing on any install whose lock directory was
+// never created or was cleaned away.
+func EnsureDir(lockDir string) error {
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		return fmt.Errorf("create lock dir: %w", err)
+	}
+	return nil
+}
+
 // Acquire takes this process's lock inside lockDir, creating the directory if
 // needed.
 func Acquire(lockDir string) (*Owner, error) {
-	if err := os.MkdirAll(lockDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create lock dir: %w", err)
+	if err := EnsureDir(lockDir); err != nil {
+		return nil, err
 	}
 	pid := os.Getpid()
 	path := filepath.Join(lockDir, lockName(pid))
@@ -114,6 +128,14 @@ func (o *Owner) Release() error {
 // this call) would delete that new owner's lock file, and the pid would read
 // as gone forever after. The stale file costs a few bytes; Acquire reuses it
 // happily via O_CREATE, so leaving it in place is free.
+//
+// Ordering note: ask this before taking your own lock, never after. Lock files
+// outlive the processes that made them, and pids are reallocated — low ones
+// especially, after a reboot. If a dead owner had the pid this process now
+// draws, acquiring first means we are holding that owner's lock file when we
+// come to check it, so its abandoned rows read as live and stay `running`
+// forever, unfixable by any later run. Reaping first sees the file unlocked and
+// correctly calls it dead.
 func OwnerAlive(lockDir string, pid int) (bool, error) {
 	if _, err := os.Stat(lockDir); err != nil {
 		// Cannot tell "this pid never had a lock here" from "this directory

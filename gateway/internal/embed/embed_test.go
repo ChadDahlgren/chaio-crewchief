@@ -16,7 +16,9 @@ import (
 	"testing"
 
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/ownership"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/registry"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/store"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/types"
 )
 
@@ -247,5 +249,50 @@ func TestStartDoesNotWarnWhenRatesFilePresent(t *testing.T) {
 
 	if strings.Contains(buf.String(), "all attempts price at $0") {
 		t.Errorf("Start() warned about rates despite the file existing: %q", buf.String())
+	}
+}
+
+// A dead owner's rows must be reaped even when this process drew that owner's
+// pid — the realistic case being a reboot, which reallocates low pids while
+// lock files survive on disk. Start reaps before it acquires for exactly this
+// reason: acquiring first leaves this process holding the dead owner's lock
+// file, so OwnerAlive reports the dead owner alive and its rows stay `running`
+// forever, unfixable by any later run.
+func TestStartReapsRowsOwnedByThisProcessesReusedPID(t *testing.T) {
+	home := t.TempDir()
+	paths := chome.ResolveIn(home)
+
+	st, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	// The dead owner: same host, and the same pid this test process now has.
+	st.AssumeOwnership(os.Getpid(), ownership.Host())
+	ctx := context.Background()
+	if err := st.RecordRequest(ctx, "stranded", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Fatalf("RecordRequest() error = %v", err)
+	}
+	st.Close()
+
+	// It exited without cleaning up: the lock directory exists, its lock file
+	// does not. Nothing here is holding pid's lock when Start runs.
+	if err := ownership.EnsureDir(paths.Locks); err != nil {
+		t.Fatal(err)
+	}
+
+	startIn(t, home)
+
+	st2, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer st2.Close()
+	rec, ok, err := st2.GetRequest(ctx, "stranded")
+	if err != nil || !ok {
+		t.Fatalf("GetRequest() ok=%v err=%v", ok, err)
+	}
+	if rec.Status != types.StatusFailed {
+		t.Errorf("stranded request status = %q, want %q — a reused pid stranded it",
+			rec.Status, types.StatusFailed)
 	}
 }

@@ -200,26 +200,37 @@ func serve() {
 	// archive but not the lock directory) makes Acquire fail, and a daemon that
 	// died at boot over a reaping feature would be a far worse outcome than one
 	// that serves without it. Without ownership we are exactly at the
-	// pre-ownership behavior: rows carry owner_pid = 0 and nothing is reaped.
+	// pre-ownership behavior: rows carry owner_pid = 0, which no reap will ever
+	// touch. Reaping rows left by *earlier* processes still runs either way —
+	// it only reads lock files.
 	//
 	// embed.Start deliberately does not do this — there, a lock it cannot take
 	// is a genuine startup failure.
 	lockDir := chome.LocksDirFor(*dbPath)
+
+	// Reap before acquiring. Lock files outlive their processes and pids get
+	// reused — realistically after a reboot, which reallocates low ones — so
+	// acquiring first can leave this process holding the lock file of a dead
+	// owner whose pid it drew. That owner's abandoned rows would then read as
+	// live and stay `running` forever, unfixable by any later run.
+	if err := ownership.EnsureDir(lockDir); err != nil {
+		log.Printf("warning: %v; orphan reaping may be skipped this run", err)
+	}
+	if n, err := st.ReapOrphans(context.Background(), lockDir, ownership.Host()); err != nil {
+		log.Printf("warning: reaping orphaned requests failed: %v", err)
+	} else if n > 0 {
+		log.Printf("failed %d orphaned request(s) left by exited processes", n)
+	}
+
 	owner, err := ownership.Acquire(lockDir)
 	if err != nil {
 		log.Printf("warning: could not acquire ownership lock in %s: %v; "+
-			"orphan reaping is disabled — requests left running by an exited process "+
-			"will stay in that state until cleaned up by hand. Make %s writable to fix.",
+			"requests this process leaves running cannot be reaped by a later one "+
+			"and will stay in that state until cleaned up by hand. Make %s writable to fix.",
 			lockDir, err, lockDir)
 	} else {
 		defer owner.Release()
 		st.AssumeOwnership(owner.PID(), ownership.Host())
-
-		if n, err := st.ReapOrphans(context.Background(), lockDir, ownership.Host()); err != nil {
-			log.Printf("warning: reaping orphaned requests failed: %v", err)
-		} else if n > 0 {
-			log.Printf("failed %d orphaned request(s) left by exited processes", n)
-		}
 	}
 
 	arch, err := archive.New(*archivePath)

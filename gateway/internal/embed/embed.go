@@ -119,6 +119,21 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 		return nil, fmt.Errorf("open store %s: %w", p.DB, err)
 	}
 
+	// Reap before acquiring, not after. Lock files outlive their processes and
+	// pids get reused, so if a dead owner had the pid we are about to draw,
+	// acquiring first would leave us holding its lock file — its abandoned rows
+	// would read as live and stay `running` forever. Creating the directory is
+	// Acquire's job normally; doing it here keeps OwnerAlive able to answer at
+	// all, since a missing lockDir means "unsure, assume alive" for every pid.
+	if err := ownership.EnsureDir(p.Locks); err != nil {
+		log.Printf("warning: %v; orphan reaping may be skipped this run", err)
+	}
+	if n, err := st.ReapOrphans(ctx, p.Locks, ownership.Host()); err != nil {
+		log.Printf("warning: reaping orphaned requests failed: %v", err)
+	} else if n > 0 {
+		log.Printf("failed %d orphaned request(s) left by exited processes", n)
+	}
+
 	owner, err := ownership.Acquire(p.Locks)
 	if err != nil {
 		st.Close()
@@ -127,14 +142,6 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 	// Every request this instance records is stamped with this owner, so a
 	// later run can tell work we abandoned from work still in flight.
 	st.AssumeOwnership(owner.PID(), ownership.Host())
-
-	// Before anything else touches the ledger: fail rows left running by
-	// processes that are gone, so a stale status is never reported as live.
-	if n, err := st.ReapOrphans(ctx, p.Locks, ownership.Host()); err != nil {
-		log.Printf("warning: reaping orphaned requests failed: %v", err)
-	} else if n > 0 {
-		log.Printf("failed %d orphaned request(s) left by exited processes", n)
-	}
 
 	arch, err := archive.New(p.Archive)
 	if err != nil {

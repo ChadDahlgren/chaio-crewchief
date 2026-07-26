@@ -17,7 +17,11 @@ between minor versions. Breaking changes will always be called out here.
 - `chaio-crewchief init` writes a starter `models.yaml` to `~/.chaio-crewchief`.
 - `--local` and `--gateway` on `usage` and `doctor` to pick a ledger explicitly.
 - Requests left running by a process that exited are failed on startup instead
-  of reporting a stale status forever.
+  of reporting a stale status forever. Reaping runs before the new process takes
+  its own ownership lock: lock files outlive their processes and pids are
+  reallocated, so a process that draws a dead owner's pid would otherwise be
+  holding that owner's lock file while checking it, read the dead owner as
+  alive, and strand its rows in `running` permanently.
 
 ### Changed
 
