@@ -71,6 +71,9 @@ func (l *liveRates) Price(model string, promptTokens, outputTokens int) float64 
 func (l *liveRates) Counterfactual(promptTokens, outputTokens int) float64 {
 	return l.current.Load().(rates.Table).Counterfactual(promptTokens, outputTokens)
 }
+func (l *liveRates) HasCounterfactual() bool {
+	return l.current.Load().(rates.Table).HasCounterfactual()
+}
 
 // serviceName is the single place the display/log name lives, so the
 // service can be renamed without hunting through the codebase.

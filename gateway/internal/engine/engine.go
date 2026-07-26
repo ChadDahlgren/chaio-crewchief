@@ -28,6 +28,7 @@ type noopRates struct{}
 
 func (noopRates) Price(model string, promptTokens, outputTokens int) float64 { return 0 }
 func (noopRates) Counterfactual(promptTokens, outputTokens int) float64      { return 0 }
+func (noopRates) HasCounterfactual() bool                                    { return false }
 
 // noopRouter never resolves anything, so every request falls back to the
 // registry default. Used when the deployment has no routing.yaml.

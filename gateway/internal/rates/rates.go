@@ -30,6 +30,11 @@ type Table interface {
 	// Counterfactual returns what the same token counts would cost at the
 	// configured frontier reference rate.
 	Counterfactual(promptTokens, outputTokens int) float64
+	// HasCounterfactual reports whether a frontier reference rate was actually
+	// configured. Counterfactual returns 0 both when no rates file exists and
+	// when the tokens genuinely price to nothing, and a caller reporting
+	// savings must not present the first as the second.
+	HasCounterfactual() bool
 }
 
 type yamlConfig struct {
@@ -52,6 +57,13 @@ func (t *tableImpl) Price(model string, promptTokens, outputTokens int) float64 
 
 func (t *tableImpl) Counterfactual(promptTokens, outputTokens int) float64 {
 	return t.counterfactual.price(promptTokens, outputTokens)
+}
+
+// HasCounterfactual is false for the empty table Load returns when rates.yaml
+// is missing, and equally for a rates.yaml with no `counterfactual:` block —
+// both leave nothing to compare a local run against.
+func (t *tableImpl) HasCounterfactual() bool {
+	return t.counterfactual.InputPerMTok != 0 || t.counterfactual.OutputPerMTok != 0
 }
 
 // Load reads rates.yaml at path. A missing file is not an error — it

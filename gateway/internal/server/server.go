@@ -188,7 +188,7 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 			CostUSD:      totals.CostUSD,
 		}
 		if rt != nil {
-			view.CounterfactualConfigured = true
+			view.CounterfactualConfigured = rt.HasCounterfactual()
 			view.CounterfactualUSD = rt.Counterfactual(int(totals.PromptTokens), int(totals.OutputTokens))
 		}
 		if view.CounterfactualUSD > 0 {
