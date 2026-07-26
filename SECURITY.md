@@ -33,11 +33,14 @@ Two things narrow it, and neither eliminates it:
 
 - It binds `127.0.0.1` on a **kernel-assigned ephemeral port**, so it is not
   reachable from another machine and the port number is not predictable.
-- It lives and dies with the MCP session rather than running indefinitely.
+- It lives and dies with the process that started it rather than running
+  indefinitely — usually the MCP session, but not only: `usage --local` and
+  `doctor --local` also start a real embedded instance to answer, so each of
+  those commands opens a listener for its own (short) duration.
 
 Neither is a security boundary. **Any process running as any user on that
-machine can enumerate loopback ports and delegate work** for as long as the
-session is up — spending against your provider accounts, and reading the
+machine can enumerate loopback ports and delegate work** for as long as a
+listener is up — spending against your provider accounts, and reading the
 prompts and responses in the ledger it opens. Loopback is not an access
 control; it only means the attacker has to already be on the box.
 
@@ -102,7 +105,8 @@ Claude Code plugin.
 - The absence of authentication, in either mode. It's documented above, it's
   the known design, and `--addr` exposure is the operator's decision. A
   *bypass* of the loopback default would be in scope, as would the embedded
-  listener binding anything other than `127.0.0.1` or outliving its session.
+  listener binding anything other than `127.0.0.1` or outliving the process
+  that started it.
 - Vulnerabilities in models or providers Crew Chief talks to.
 - Anything requiring an attacker who already has shell access on the gateway
   box *as the same user* — at that point the API keys are readable directly.

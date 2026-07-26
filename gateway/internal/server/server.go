@@ -21,7 +21,11 @@ type Engine interface {
 }
 
 // StatsResponse is the /stats body: the per-bucket rows plus a whole-store
-// rollup with the frontier counterfactual — the 20%-thesis dashboard number.
+// rollup. The rollup carries the frontier counterfactual — what every attempt
+// in the ledger would have cost had the same tokens been billed at the
+// frontier rate in rates.yaml — alongside what they actually cost, so the
+// difference between the two is the number `chaio-crewchief usage` reports as
+// savings. Both are 0 when no rates table is loaded.
 type StatsResponse struct {
 	Rows   []types.StatRow `json:"rows"`
 	Totals StatsTotalsView `json:"totals"`

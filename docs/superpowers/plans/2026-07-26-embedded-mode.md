@@ -2306,6 +2306,17 @@ actually exercises them.
 is a data race against the signal-handler shape Task 8 introduces; it is now a
 `sync.Once` with a stored error.
 
+**Task 1 — the plan hardcoded the lock directory under the home.**
+`chome.ResolveIn` sets `Locks: filepath.Join(home, "locks")` in the plan text.
+The shipped code instead derives it from the database path via a new
+`chome.LocksDirFor(dbPath)`, and `ResolveIn` calls that. The plan's version is
+wrong for `serve`, which takes an explicit `--db` and has no home at all, so it
+could not use `Paths.Locks` and would have had to invent its own derivation —
+and two processes sharing a ledger that disagree about where the locks live
+declare each other dead: the one looking in the wrong directory finds no lock
+file for the other's PID, concludes it exited, and reaps its genuinely
+in-flight rows. One function makes them agree by construction.
+
 Smaller corrections: `usage`/`doctor` reject flags placed after a positional
 argument rather than silently discarding them; `init` rejects trailing
 arguments rather than reporting success; `-h` exits 0.
