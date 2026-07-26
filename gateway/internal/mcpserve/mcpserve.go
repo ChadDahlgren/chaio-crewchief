@@ -153,7 +153,7 @@ type delegateIn struct {
 }
 
 type requestIn struct {
-	RequestID string `json:"request_id" jsonschema:"id returned by an async crewchief_delegate"`
+	RequestID string `json:"request_id" jsonschema:"request_id returned by any crewchief_delegate call, async or synchronous"`
 }
 
 type historyIn struct {
@@ -187,7 +187,7 @@ func RunWith(ctx context.Context, version string, opts Options) error {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "crewchief_request",
-		Description: "Poll the status/result of an async delegation by request_id. Only reachable in gateway mode (CHAIO_CREWCHIEF_URL pointing at a running `chaio-crewchief serve`), since the default embedded mode refuses async and so never issues an id to poll."},
+		Description: "Poll the status/result of a delegation by request_id. Works in both modes: every delegation records a request row and returns a pollable request_id, synchronous ones included. Only the ids handed back *before* the work finishes are gateway-mode-only, since embedded mode rejects async."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in requestIn) (*mcp.CallToolResult, any, error) {
 			out, err := c.get(ctx, "/requests/"+url.PathEscape(in.RequestID), defaultTimeout)
 			if err != nil {
