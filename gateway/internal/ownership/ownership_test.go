@@ -46,7 +46,7 @@ func TestOwnerAliveFalseAfterRelease(t *testing.T) {
 	}
 }
 
-func TestOwnerAliveFalseForUnknownPID(t *testing.T) {
+func TestOwnerAliveFalseWhenNoLockFile(t *testing.T) {
 	dir := t.TempDir()
 	alive, err := OwnerAlive(dir, 999999)
 	if err != nil {
@@ -54,6 +54,58 @@ func TestOwnerAliveFalseForUnknownPID(t *testing.T) {
 	}
 	if alive {
 		t.Error("OwnerAlive() = true with no lock file present, want false")
+	}
+}
+
+func TestOwnerAliveTrueWhenLockDirMissing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+	alive, err := OwnerAlive(dir, 999999)
+	if err == nil {
+		t.Fatal("OwnerAlive() error = nil, want non-nil for a missing lockDir")
+	}
+	if !alive {
+		t.Error("OwnerAlive() = false for a missing lockDir, want true: unsure must mean alive")
+	}
+}
+
+func TestOwnerAliveTrueWhenLockFileUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file mode bits")
+	}
+	dir := t.TempDir()
+	pid := 424242
+	path := filepath.Join(dir, lockName(pid))
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	alive, err := OwnerAlive(dir, pid)
+	if err == nil {
+		t.Fatal("OwnerAlive() error = nil, want non-nil for an unreadable lock file")
+	}
+	if !alive {
+		t.Error("OwnerAlive() = false for an unreadable lock file, want true: unsure must mean alive")
+	}
+}
+
+func TestOwnerAliveFalseForStaleLockFileAndLeavesItInPlace(t *testing.T) {
+	dir := t.TempDir()
+	pid := 555555
+	path := filepath.Join(dir, lockName(pid))
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alive, err := OwnerAlive(dir, pid)
+	if err != nil {
+		t.Fatalf("OwnerAlive() error = %v", err)
+	}
+	if alive {
+		t.Error("OwnerAlive() = true for a lock file left behind by a dead owner, want false")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("stale lock file removed by OwnerAlive, want it left in place: stat err = %v", err)
 	}
 }
 
@@ -75,11 +127,16 @@ func TestOwnerAliveTrueForLiveExternalProcess(t *testing.T) {
 		_ = helper.Wait()
 	}()
 
-	// The helper prints one line as soon as it holds the lock.
+	// The helper prints one line as soon as it holds the lock. If Acquire
+	// failed in the helper, t.Fatalf's output lands on stdout instead and
+	// must not be mistaken for readiness.
 	buf := make([]byte, 64)
 	n, err := stdout.Read(buf)
 	if err != nil || n == 0 {
 		t.Fatalf("helper never reported readiness: n=%d err=%v", n, err)
+	}
+	if got := string(buf[:n]); got != "ready\n" {
+		t.Fatalf("helper reported %q, want %q (helper likely failed to Acquire)", got, "ready\n")
 	}
 
 	alive, err := OwnerAlive(dir, helper.Process.Pid)

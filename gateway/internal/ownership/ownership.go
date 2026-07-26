@@ -58,8 +58,11 @@ func Acquire(lockDir string) (*Owner, error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		// A PID's lock is already held: the number was reused while a stale
-		// lock file lingered. Nothing here is safe to assume, so refuse.
+		// Either a genuinely live process already holds this pid's lock, or
+		// this same process called Acquire twice: flock conflicts across
+		// separate descriptors within one process, which is what the
+		// self-alive test relies on. A stale file left by a dead owner flocks
+		// successfully, so it cannot produce this error.
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	return &Owner{pid: pid, path: path, f: f}, nil
@@ -69,14 +72,22 @@ func Acquire(lockDir string) (*Owner, error) {
 func (o *Owner) PID() int { return o.pid }
 
 // Release drops the lock and removes the file.
+//
+// The file is removed while the lock is still held, before unlocking or
+// closing. Removing after unlocking would open a window where a process that
+// reused this pid could acquire the lock on the same inode between our
+// unlock and our remove; the remove would then delete the new owner's lock
+// file out from under it, and every later OwnerAlive check for that pid
+// would find nothing and wrongly report it gone, permanently.
 func (o *Owner) Release() error {
 	if o == nil || o.f == nil {
 		return nil
 	}
+	rmErr := os.Remove(o.path)
 	_ = syscall.Flock(int(o.f.Fd()), syscall.LOCK_UN)
 	err := o.f.Close()
 	o.f = nil
-	if rmErr := os.Remove(o.path); rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
+	if rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
 		err = rmErr
 	}
 	return err
@@ -84,9 +95,22 @@ func (o *Owner) Release() error {
 
 // OwnerAlive reports whether the process that recorded pid still holds its
 // lock. A missing lock file means the owner is gone and cleaned up after
-// itself. Anything ambiguous returns true, because leaving a stale row alone
-// is a smaller harm than failing a live one.
+// itself. Anything ambiguous — an unreadable lock file, a missing lockDir —
+// returns true, because leaving a stale row alone is a smaller harm than
+// failing a live one.
+//
+// A lock file left behind by a dead owner is never removed here: doing so
+// while another process is mid-Acquire on the same pid (a reused pid racing
+// this call) would delete that new owner's lock file, and the pid would read
+// as gone forever after. The stale file costs a few bytes; Acquire reuses it
+// happily via O_CREATE, so leaving it in place is free.
 func OwnerAlive(lockDir string, pid int) (bool, error) {
+	if _, err := os.Stat(lockDir); err != nil {
+		// Cannot tell "this pid never had a lock here" from "this directory
+		// was never the right one to ask." Either way, unsure means alive.
+		return true, fmt.Errorf("stat lock dir: %w", err)
+	}
+
 	path := filepath.Join(lockDir, lockName(pid))
 	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
 	if err != nil {
@@ -100,8 +124,7 @@ func OwnerAlive(lockDir string, pid int) (bool, error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return true, nil // held by a live process
 	}
-	// We took it, so nobody owned it. Drop it again and remove the stale file.
+	// We took it, so nobody owned it. Drop it again; leave the file in place.
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	_ = os.Remove(path)
 	return false, nil
 }
