@@ -2270,6 +2270,46 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Corrections applied during execution
+
+This plan was executed on 2026-07-26. Review found defects **in the plan's own
+code** — the implementers transcribed it faithfully and the bugs were mine. The
+shipped code in git is correct; the task text above is not. Anyone re-running
+this plan should apply these first.
+
+**Task 3 — two PID-reuse races in the plan's `ownership` code.**
+`OwnerAlive`'s `os.Remove(path)` can unlink the lock file of a *live* process:
+if a PID was reused and that process is inside `Acquire` (file opened, not yet
+flocked), the reaper takes the lock, concludes "gone", and unlinks the entry.
+Every later check then reports that live process dead — permanently, silently,
+and un-self-healing. The removal was deleted outright; a stale lock file is a
+few bytes and `Acquire` reuses it via `O_CREATE`. `Release` had the same shape
+and now removes the file *while still holding the lock*. `OwnerAlive` also
+stats the lock directory first and returns "alive" when it is missing, so a
+misconfigured path cannot mass-fail every running row.
+
+**Task 4 — the plan's tests assumed a lock directory that nothing creates.**
+Following from the above, `TestReapOrphansIsIdempotent` and
+`TestRecordRequestStampsAssumedOwner` must `os.MkdirAll` the lock directory
+before reaping, or `OwnerAlive` correctly reports "alive" and nothing is
+reaped.
+
+**Task 8 — the starter config named a key the loader ignores.**
+`StarterModelsYAML` used `model:`, but `types.Preset` declares
+`yaml:"model_id"`. YAML decoding is non-strict, so the key was dropped
+silently: a user uncommenting the example got an empty model ID, no parse
+error, and an upstream failure that looked like their own mistake. Fixed, and
+the examples now live uncommented in a separately-tested constant so the test
+actually exercises them.
+
+**Task 5 — `Close` needed real synchronization.** The plan's plain `bool` flag
+is a data race against the signal-handler shape Task 8 introduces; it is now a
+`sync.Once` with a stored error.
+
+Smaller corrections: `usage`/`doctor` reject flags placed after a positional
+argument rather than silently discarding them; `init` rejects trailing
+arguments rather than reporting success; `-h` exits 0.
+
 ## Follow-up, not in this plan
 
 The design document names one related fix that is genuinely separate: the plugin should fail with a readable message when the binary is not on `PATH`, instead of a cryptic MCP startup error. That is a `plugin/` concern with no dependency on anything here, and it deserves its own change.
