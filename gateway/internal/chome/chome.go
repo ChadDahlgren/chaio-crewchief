@@ -48,16 +48,34 @@ func Dir() (string, error) {
 	return filepath.Join(home, dirName), nil
 }
 
+// dbName is the ledger filename inside a home.
+const dbName = "chaio-crewchief.db"
+
+// LocksDirFor returns the ownership-lock directory for a database path.
+//
+// This exists so there is exactly one derivation. The lock directory must be a
+// pure function of the database location, because two processes sharing a
+// ledger must agree on where the locks live or they will declare each other
+// dead: an embedded `mcp` that looked in the wrong directory would find no
+// lock file for a running `serve`'s PID, conclude that process had exited, and
+// mark its genuinely in-flight rows failed. `serve` takes an explicit --db and
+// has no home, so it cannot use Paths.Locks; it calls this instead, and the
+// two agree by construction rather than by coincidence.
+func LocksDirFor(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "locks")
+}
+
 // ResolveIn builds the paths under an explicit home directory.
 func ResolveIn(home string) Paths {
+	db := filepath.Join(home, dbName)
 	return Paths{
 		Home:    home,
 		Models:  filepath.Join(home, "models.yaml"),
 		Rates:   filepath.Join(home, "rates.yaml"),
 		Routing: filepath.Join(home, "routing.yaml"),
-		DB:      filepath.Join(home, "chaio-crewchief.db"),
+		DB:      db,
 		Archive: filepath.Join(home, "archive"),
-		Locks:   filepath.Join(home, "locks"),
+		Locks:   LocksDirFor(db),
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -196,18 +195,31 @@ func serve() {
 	}
 	defer st.Close()
 
-	lockDir := filepath.Join(filepath.Dir(*dbPath), "locks")
+	// Ownership is an optimization, not a prerequisite for serving. A hardened
+	// unit (ProtectSystem=strict with ReadWritePaths naming the database and
+	// archive but not the lock directory) makes Acquire fail, and a daemon that
+	// died at boot over a reaping feature would be a far worse outcome than one
+	// that serves without it. Without ownership we are exactly at the
+	// pre-ownership behavior: rows carry owner_pid = 0 and nothing is reaped.
+	//
+	// embed.Start deliberately does not do this — there, a lock it cannot take
+	// is a genuine startup failure.
+	lockDir := chome.LocksDirFor(*dbPath)
 	owner, err := ownership.Acquire(lockDir)
 	if err != nil {
-		log.Fatalf("acquire ownership lock: %v", err)
-	}
-	defer owner.Release()
-	st.AssumeOwnership(owner.PID(), ownership.Host())
+		log.Printf("warning: could not acquire ownership lock in %s: %v; "+
+			"orphan reaping is disabled — requests left running by an exited process "+
+			"will stay in that state until cleaned up by hand. Make %s writable to fix.",
+			lockDir, err, lockDir)
+	} else {
+		defer owner.Release()
+		st.AssumeOwnership(owner.PID(), ownership.Host())
 
-	if n, err := st.ReapOrphans(context.Background(), lockDir, ownership.Host()); err != nil {
-		log.Printf("warning: reaping orphaned requests failed: %v", err)
-	} else if n > 0 {
-		log.Printf("failed %d orphaned request(s) left by exited processes", n)
+		if n, err := st.ReapOrphans(context.Background(), lockDir, ownership.Host()); err != nil {
+			log.Printf("warning: reaping orphaned requests failed: %v", err)
+		} else if n > 0 {
+			log.Printf("failed %d orphaned request(s) left by exited processes", n)
+		}
 	}
 
 	arch, err := archive.New(*archivePath)

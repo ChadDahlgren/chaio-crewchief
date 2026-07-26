@@ -50,3 +50,21 @@ func TestResolveInBuildsAllPaths(t *testing.T) {
 		}
 	}
 }
+
+// The whole point of LocksDirFor: an embedded process resolving a home and a
+// `serve` given that home's database as --db must land on the same lock
+// directory. If they diverge, each finds no lock file for the other's PID,
+// concludes it is dead, and fails its live rows.
+func TestLocksDirForAgreesWithResolvedHome(t *testing.T) {
+	p := ResolveIn("/h")
+	if got := LocksDirFor(p.DB); got != p.Locks {
+		t.Errorf("LocksDirFor(%q) = %q, want %q", p.DB, got, p.Locks)
+	}
+}
+
+// serve's --db default is relative, so the derivation must survive that too.
+func TestLocksDirForRelativePath(t *testing.T) {
+	if got := LocksDirFor("./chaio-crewchief.db"); got != "locks" {
+		t.Errorf("LocksDirFor(\"./chaio-crewchief.db\") = %q, want %q", got, "locks")
+	}
+}
