@@ -122,6 +122,10 @@ func Init(w io.Writer, args []string) int {
 		return 1
 	}
 
-	fmt.Fprintf(w, "Wrote %s\n\nEdit it to add a model, then restart your Claude Code session.\n", paths.Models)
+	// Say explicitly that the file is inert. "Edit it to add a model" reads as
+	// optional polish next to a file that visibly contains two presets, so it
+	// is easy to stop here — and the roster is empty until a preset is actually
+	// uncommented, which is the whole reason delegation still refuses.
+	fmt.Fprintf(w, "Wrote %s\n\nEvery preset in it is commented out, so the roster is empty and delegation\nwill still refuse. Uncomment one, point it at a real endpoint, then restart\nyour Claude Code session.\n", paths.Models)
 	return 0
 }

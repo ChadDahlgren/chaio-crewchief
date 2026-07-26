@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/embed"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/registry"
 )
 
@@ -176,5 +179,51 @@ func TestInitForceOverwrites(t *testing.T) {
 	}
 	if string(b) == "models: []\n" {
 		t.Error("Init(--force) did not overwrite")
+	}
+}
+
+// End to end through the real `init`: the file it writes must leave the
+// embedded gateway reporting "no models configured", so delegation returns the
+// actionable guidance rather than a 500.
+//
+// `init` writes `models: []` with every preset commented out. That parses fine,
+// so ModelsConfigured — keyed off the absence of a load error — came back true
+// with an empty roster, and following the documented setup made the failure
+// strictly less helpful: with no config, delegation named the file to create;
+// after `init`, the same call returned a bare 500.
+func TestInitLeavesModelsReportedAsNotConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CHAIO_CREWCHIEF_HOME", home)
+
+	var out bytes.Buffer
+	if code := Init(&out, nil); code != 0 {
+		t.Fatalf("Init() = %d, want 0; output: %s", code, out.String())
+	}
+
+	inst, err := embed.Start(context.Background(), embed.Config{Paths: chome.ResolveIn(home)})
+	if err != nil {
+		t.Fatalf("embed.Start() after init error = %v", err)
+	}
+	defer inst.Close()
+
+	if inst.ModelsConfigured {
+		t.Error("ModelsConfigured = true after `init`, want false: every preset it writes is commented out")
+	}
+}
+
+// The success message must say the file is inert. "Edit it to add a model"
+// read as optional polish next to a file that visibly contains two presets.
+func TestInitSuccessMessageSaysPresetsAreCommentedOut(t *testing.T) {
+	t.Setenv("CHAIO_CREWCHIEF_HOME", t.TempDir())
+
+	var out bytes.Buffer
+	if code := Init(&out, nil); code != 0 {
+		t.Fatalf("Init() = %d, want 0", code)
+	}
+	msg := out.String()
+	for _, want := range []string{"commented out", "Uncomment"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("init message %q, want it to mention %q", msg, want)
+		}
 	}
 }

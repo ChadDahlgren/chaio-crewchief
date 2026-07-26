@@ -1,10 +1,12 @@
 package embed
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -200,5 +202,50 @@ func TestEachStartGetsItsOwnPort(t *testing.T) {
 		if code != http.StatusOK {
 			t.Errorf("GET %s/health = %d, want 200", inst.BaseURL, code)
 		}
+	}
+}
+
+// The same guard has to cover a hand-written models.yaml someone emptied, which
+// is not a file `init` would ever produce.
+func TestStartWithEmptyRosterReportsModelsNotConfigured(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "models.yaml"), []byte("models: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inst := startIn(t, home)
+	if inst.ModelsConfigured {
+		t.Error("ModelsConfigured = true with an empty roster, want false")
+	}
+}
+
+// Embedded mode never warned that pricing was off, so a new user got a ledger
+// where every attempt cost $0.00 and `usage` reported "savings: $0.00 (0.0%)"
+// with nothing anywhere saying why. `serve` has warned about this all along.
+func TestStartWarnsWhenRatesFileMissing(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	home := t.TempDir()
+	startIn(t, home)
+
+	if !strings.Contains(buf.String(), "all attempts price at $0") {
+		t.Errorf("Start() logged %q, want a warning that the rates file is missing", buf.String())
+	}
+}
+
+func TestStartDoesNotWarnWhenRatesFilePresent(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "rates.yaml"), []byte("models: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startIn(t, home)
+
+	if strings.Contains(buf.String(), "all attempts price at $0") {
+		t.Errorf("Start() warned about rates despite the file existing: %q", buf.String())
 	}
 }

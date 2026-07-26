@@ -96,6 +96,15 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load rates %s: %w", p.Rates, err)
 	}
+	// `serve` has warned about this since it shipped; embedded mode did not,
+	// and embedded mode is the path a new user actually takes. Without rates
+	// every attempt prices at $0 and the frontier counterfactual is $0 too, so
+	// `usage` reports "savings: $0.00 (0.0%)" — a number that looks like an
+	// answer rather than a missing input. Not fatal: a purely local roster is a
+	// legitimate way to run, and the ledger is still correct about tokens.
+	if _, statErr := os.Stat(p.Rates); statErr != nil {
+		log.Printf("warning: rates file %s not found, all attempts price at $0 (local)", p.Rates)
+	}
 
 	router, err := routing.Load(p.Routing)
 	if err != nil {
@@ -160,10 +169,18 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 }
 
 // loadRegistry returns the registry and whether one was actually configured.
+//
+// "Configured" means a roster with something in it, not merely a file that
+// parsed. `init` deliberately writes `models: []` with every preset commented
+// out, and that parses fine — so keying off the absence of an error made
+// running the documented setup step strictly worse than doing nothing: with no
+// config at all delegation named the file to create, and after `init` the same
+// call returned a bare 500. An emptied hand-written models.yaml had the same
+// problem. Counting presets covers both.
 func loadRegistry(path string) (types.Registry, bool, error) {
 	reg, err := registry.LoadRegistry(path)
 	if err == nil {
-		return reg, true, nil
+		return reg, len(reg.List()) > 0, nil
 	}
 	if errors.Is(err, registry.ErrNotFound) {
 		return emptyRegistry{}, false, nil
