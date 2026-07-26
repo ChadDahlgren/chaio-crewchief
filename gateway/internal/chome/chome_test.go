@@ -2,6 +2,7 @@ package chome
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,50 @@ func TestLocksDirForAgreesWithResolvedHome(t *testing.T) {
 func TestLocksDirForRelativePath(t *testing.T) {
 	if got := LocksDirFor("./chaio-crewchief.db"); got != "locks" {
 		t.Errorf("LocksDirFor(\"./chaio-crewchief.db\") = %q, want %q", got, "locks")
+	}
+}
+
+// A non-absolute CHAIO_CREWCHIEF_HOME cannot work, so it must fail loudly
+// rather than resolve per-CWD.
+func TestDirRejectsNonAbsoluteHome(t *testing.T) {
+	cases := map[string]string{
+		// Exactly what a quoted value in an MCP server config JSON produces:
+		// no shell runs, so the tilde stays literal and used to create a
+		// directory named "~" in the working directory.
+		"unexpanded tilde":      "~",
+		"unexpanded tilde path": "~/.chaio-crewchief",
+		// Claude Code launches the MCP server with an arbitrary working
+		// directory, so a relative home means the CLI and the MCP session use
+		// different ledgers and different lock directories.
+		"relative":     "crewchief",
+		"dot relative": "./crewchief",
+		"parent":       "../crewchief",
+	}
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(EnvHome, value)
+			got, err := Dir()
+			if err == nil {
+				t.Fatalf("Dir() = %q, nil; want an error for %q", got, value)
+			}
+			if !strings.Contains(err.Error(), EnvHome) {
+				t.Errorf("Dir() error = %v, want it to name %s", err, EnvHome)
+			}
+			if !strings.Contains(err.Error(), value) {
+				t.Errorf("Dir() error = %v, want it to quote the offending value %q", err, value)
+			}
+		})
+	}
+}
+
+func TestDirAcceptsAbsoluteHome(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(EnvHome, dir)
+	got, err := Dir()
+	if err != nil {
+		t.Fatalf("Dir() error = %v", err)
+	}
+	if got != dir {
+		t.Errorf("Dir() = %q, want %q", got, dir)
 	}
 }

@@ -37,8 +37,22 @@ type Paths struct {
 }
 
 // Dir returns the resolved home directory. It does not create it.
+//
+// A non-absolute override is rejected rather than accepted and quietly
+// resolved. Two values are worth naming. A literal unexpanded "~" is exactly
+// what a quoted value in an MCP server config JSON produces, and it used to
+// create a directory actually named "~" in whatever the working directory was,
+// reporting success indistinguishable from having written the real home. Any
+// relative value resolves per-CWD, and as this package's doc comment says,
+// Claude Code launches the MCP server with an arbitrary working directory — so
+// the CLI and the MCP session would silently use different ledgers and
+// different lock directories, which also means each would see the other's
+// in-flight rows as unowned. Failing here is the only way the user finds out.
 func Dir() (string, error) {
 	if v := os.Getenv(EnvHome); v != "" {
+		if !filepath.IsAbs(v) {
+			return "", fmt.Errorf("%s must be an absolute path, got %q (shell ~ is not expanded inside a quoted value; write the full path)", EnvHome, v)
+		}
 		return v, nil
 	}
 	home, err := os.UserHomeDir()
