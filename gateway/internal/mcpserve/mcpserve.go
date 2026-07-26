@@ -205,6 +205,16 @@ func RunWith(ctx context.Context, version string, opts Options) error {
 			if err != nil {
 				return nil, nil, err
 			}
+			// On a fresh install the gateway is genuinely healthy and has
+			// nothing to be healthy about. Health is the tool callers are told
+			// to run first, so it is the one that should say what to do next —
+			// otherwise an empty-but-OK response reads as "all fine" and the
+			// first delegation is where the user finds out it isn't.
+			if !opts.ModelsConfigured {
+				return textResult(fmt.Sprintf(
+					"%s\n\nThe gateway is running, but no models are configured, so delegation will refuse. Create %s, or run `chaio-crewchief init` to write a starter file, then restart this session.",
+					out, opts.ModelsPath)), nil, nil
+			}
 			return textResult(out), nil, nil
 		})
 
