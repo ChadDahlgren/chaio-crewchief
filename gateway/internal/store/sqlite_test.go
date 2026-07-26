@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/ownership"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/types"
 )
 
@@ -271,5 +273,162 @@ func TestRequestResultRoundtrip(t *testing.T) {
 
 	if _, found, _ := s.GetRequest(ctx, "nope"); found {
 		t.Fatal("GetRequest should not find unknown id")
+	}
+}
+
+func TestReapOrphansOnlyFailsDeadLocalRows(t *testing.T) {
+	dir := t.TempDir()
+	lockDir := filepath.Join(dir, "locks")
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	host := ownership.Host()
+
+	// A live owner: this process, holding its lock.
+	live, err := ownership.Acquire(lockDir)
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	defer live.Release()
+
+	seed := func(id string, pid int, h string) {
+		if err := st.RecordRequest(ctx, id, types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+			t.Fatalf("RecordRequest(%s) error = %v", id, err)
+		}
+		if err := st.SetRequestOwner(ctx, id, pid, h); err != nil {
+			t.Fatalf("SetRequestOwner(%s) error = %v", id, err)
+		}
+	}
+	seed("dead-local", 999999, host)     // no lock file -> orphan
+	seed("live-local", live.PID(), host) // lock held -> must survive
+	seed("other-host", 999998, "some-other-box")
+	// A finished row must never be touched regardless of owner.
+	if err := st.RecordRequest(ctx, "done", types.DelegateRequest{Task: "t"}, types.StatusDelivered); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRequestOwner(ctx, "done", 999997, host); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if n != 1 {
+		t.Errorf("ReapOrphans() reaped %d rows, want 1", n)
+	}
+
+	want := map[string]types.DelegateStatus{
+		"dead-local": types.StatusFailed,
+		"live-local": types.StatusRunning,
+		"other-host": types.StatusRunning,
+		"done":       types.StatusDelivered,
+	}
+	for id, wantStatus := range want {
+		rec, ok, err := st.GetRequest(ctx, id)
+		if err != nil || !ok {
+			t.Fatalf("GetRequest(%s) ok=%v err=%v", id, ok, err)
+		}
+		if rec.Status != wantStatus {
+			t.Errorf("%s status = %q, want %q", id, rec.Status, wantStatus)
+		}
+	}
+}
+
+// The lock directory is created before the first reap so OwnerAlive can
+// actually resolve dead-vs-live rather than treating a missing lockDir as
+// "unsure, assume alive" (see internal/ownership). Without this, the first
+// reap would fail 0 rows and the test would demonstrate nothing.
+func TestReapOrphansIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	lockDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	host := ownership.Host()
+
+	if err := st.RecordRequest(ctx, "x", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRequestOwner(ctx, "x", 999999, host); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("first ReapOrphans() reaped %d rows, want 1", n)
+	}
+	n, err = st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatalf("second ReapOrphans() error = %v", err)
+	}
+	if n != 0 {
+		t.Errorf("second ReapOrphans() reaped %d rows, want 0", n)
+	}
+}
+
+// Rows written before the owner columns existed have no owner. They must not
+// be reaped on the strength of a zero PID.
+func TestReapOrphansSkipsRowsWithNoRecordedOwner(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	if err := st.RecordRequest(ctx, "legacy", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.ReapOrphans(ctx, filepath.Join(dir, "locks"), ownership.Host())
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if n != 0 {
+		t.Errorf("ReapOrphans() reaped %d unowned rows, want 0", n)
+	}
+}
+
+// Without this, ReapOrphans silently never fires in production: the engine
+// records requests knowing nothing about processes, so every row would carry
+// owner_pid 0 and be skipped.
+func TestRecordRequestStampsAssumedOwner(t *testing.T) {
+	dir := t.TempDir()
+	lockDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	host := ownership.Host()
+
+	st.AssumeOwnership(999999, host) // a PID with no lock: an orphan by construction
+	if err := st.RecordRequest(ctx, "stamped", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("ReapOrphans() = %d, want 1; RecordRequest did not stamp the owner", n)
 	}
 }

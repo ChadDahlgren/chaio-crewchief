@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/ownership"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/types"
 )
 
@@ -25,6 +26,8 @@ CREATE TABLE IF NOT EXISTS requests (
   status TEXT NOT NULL,
   artifact TEXT NOT NULL DEFAULT '',
   escalation TEXT NOT NULL DEFAULT '',
+  owner_pid INTEGER NOT NULL DEFAULT 0,
+  owner_host TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 
@@ -81,6 +84,20 @@ var migrations = []migration{
 			return nil
 		},
 	},
+	{
+		version: 4, // request ownership, for orphan reaping
+		up: func(db *sql.DB) error {
+			for _, stmt := range []string{
+				`ALTER TABLE requests ADD COLUMN owner_pid INTEGER NOT NULL DEFAULT 0`,
+				`ALTER TABLE requests ADD COLUMN owner_host TEXT NOT NULL DEFAULT ''`,
+			} {
+				if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+					return fmt.Errorf("add owner columns: %w", err)
+				}
+			}
+			return nil
+		},
+	},
 }
 
 func applyMigrations(db *sql.DB) error {
@@ -104,7 +121,9 @@ func applyMigrations(db *sql.DB) error {
 }
 
 type SQLite struct {
-	db *sql.DB
+	db        *sql.DB
+	ownerPID  int
+	ownerHost string
 }
 
 func Open(path string) (*SQLite, error) {
@@ -134,9 +153,10 @@ func Open(path string) (*SQLite, error) {
 func (s *SQLite) RecordRequest(ctx context.Context, id string, req types.DelegateRequest, status types.DelegateStatus) error {
 	// mode/tests columns are retained (unused, empty) to avoid a schema
 	// migration; the verify/mode concepts they held no longer exist.
-	query := `INSERT INTO requests (id, task, model, mode, tests, lang, async, status, created_at) VALUES (?, ?, ?, '', '', ?, ?, ?, ?)`
+	query := `INSERT INTO requests (id, task, model, mode, tests, lang, async, status, owner_pid, owner_host, created_at) VALUES (?, ?, ?, '', '', ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.ExecContext(ctx, query,
 		id, req.Task, req.Model, req.Lang, req.Async, status,
+		s.ownerPID, s.ownerHost,
 		time.Now().UTC().Format(time.RFC3339),
 	)
 	return err
@@ -146,6 +166,74 @@ func (s *SQLite) UpdateRequestStatus(ctx context.Context, id string, status type
 	query := `UPDATE requests SET status = ? WHERE id = ?`
 	_, err := s.db.ExecContext(ctx, query, status, id)
 	return err
+}
+
+// AssumeOwnership tells the store which process owns the requests it records,
+// so RecordRequest can stamp every row without the engine knowing anything
+// about processes. Call it once, right after Open. A store that was never told
+// records no owner, and rows without one are never reaped.
+func (s *SQLite) AssumeOwnership(pid int, host string) {
+	s.ownerPID, s.ownerHost = pid, host
+}
+
+// SetRequestOwner records which process is working a request, so a later run
+// can tell an orphan from work still in flight.
+func (s *SQLite) SetRequestOwner(ctx context.Context, id string, pid int, host string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE requests SET owner_pid = ?, owner_host = ? WHERE id = ?`, pid, host, id)
+	return err
+}
+
+// ReapOrphans fails every request left running by a process that no longer
+// exists, and reports how many it failed.
+//
+// Two guards keep it from failing live work. Rows recorded on another host are
+// never touched: a ledger written by a server elsewhere must not have this
+// machine declaring its rows dead. Rows with no recorded owner are never
+// touched either, since they predate ownership and a zero PID says nothing.
+// Anything else ambiguous is left alone — a stale row is a smaller harm than a
+// wrongly failed one.
+func (s *SQLite) ReapOrphans(ctx context.Context, lockDir, host string) (int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, owner_pid FROM requests
+		  WHERE status = ? AND owner_host = ? AND owner_pid > 0`,
+		string(types.StatusRunning), host)
+	if err != nil {
+		return 0, fmt.Errorf("query running requests: %w", err)
+	}
+
+	type candidate struct {
+		id  string
+		pid int
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.pid); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan running request: %w", err)
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterate running requests: %w", err)
+	}
+	rows.Close()
+
+	reaped := 0
+	for _, c := range candidates {
+		alive, err := ownership.OwnerAlive(lockDir, c.pid)
+		if err != nil || alive {
+			continue // ambiguous or live: leave it alone
+		}
+		if err := s.UpdateRequestResult(ctx, c.id, types.StatusFailed, "",
+			fmt.Sprintf("orphaned: owning process %d on %s exited before finishing", c.pid, host)); err != nil {
+			return reaped, fmt.Errorf("fail orphan %s: %w", c.id, err)
+		}
+		reaped++
+	}
+	return reaped, nil
 }
 
 func (s *SQLite) UpdateRequestResult(ctx context.Context, id string, status types.DelegateStatus, artifact, errMsg string) error {
