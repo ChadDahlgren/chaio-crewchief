@@ -10,7 +10,7 @@ between minor versions. Breaking changes will always be called out here.
 
 ## [Unreleased]
 
-## [0.4.0] — unreleased
+## [0.4.0] — 2026-07-26
 
 First public release. Earlier versions existed only in a private deployment
 and are not published; this entry describes the state at first release rather

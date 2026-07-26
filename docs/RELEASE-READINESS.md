@@ -305,17 +305,19 @@ Do not do this until Phases 1–4 are done and verified.
 - [ ] Confirm no personal infrastructure is referenced anywhere. The only
       personal data in the repo is your name and email in the plugin author
       fields, which is correct and intentional for an open source project.
-- [ ] Flip the repo to public.
-- [ ] Enable: Private Vulnerability Reporting, secret scanning + push
-      protection (free on public repos — push protection actively blocks you
-      from ever committing a credential). Dependabot alerts are already on.
+- [x] **Repo is public** (2026-07-26).
+- [x] **Enabled and verified after the flip**: secret scanning, push
+      protection (blocks credential commits at the git layer), and private
+      vulnerability reporting. Dependabot alerts were already on.
 - [ ] **Confirm CodeQL starts running.** Its job is gated on
       `github.event.repository.visibility == 'public'` because code scanning
       needs GitHub Advanced Security on private repositories — the analysis
       succeeds and the *upload* fails with "Code scanning is not enabled for
       this repository". Going public should switch it on with no workflow
       change; verify a run actually appears rather than assuming it did.
-- [ ] Apply branch protection now if the free tier blocked it earlier.
+- [x] Branch protection was already active via rulesets, which work on
+      private repos too — the paid-plan limit applies to legacy branch
+      protection, not rulesets.
 
 ---
 
