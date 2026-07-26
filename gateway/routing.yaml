@@ -1,0 +1,9 @@
+# Language -> preferred model preset. Plain data lookup, never inference —
+# Crew Chief only reads this; deciding what belongs here is the operator's job,
+# informed by chaio-bench (which grades candidate models offline). Used when a
+# DelegateRequest sets `lang` but not `model`; falls back to the registry
+# default when a lang has no entry here. Missing file is not an error.
+routes:
+  python: local-coder
+  # typescript: cf-glm-5.2
+  # go: local-coder

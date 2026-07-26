@@ -1,0 +1,132 @@
+# GoReleaser builds, checksums, and publishes chaio-crewchief, and writes the
+# Homebrew formula into ChadDahlgren/homebrew-tap so `brew install` works
+# without anyone compiling Go.
+#
+# Run locally without publishing anything:
+#   goreleaser release --snapshot --clean
+# CI runs the real thing on a v* tag (see .github/workflows/release.yml).
+version: 2
+
+project_name: chaio-crewchief
+
+before:
+  hooks:
+    # The Go module lives in gateway/, not the repo root.
+    - go -C gateway mod tidy
+
+builds:
+  - id: chaio-crewchief
+    # Config sits at the repo root so archives can include LICENSE/README;
+    # the Go module is one level down.
+    dir: gateway
+    main: ./cmd/chaio-crewchief
+    binary: chaio-crewchief
+    env:
+      # Pure Go: the SQLite driver must be CGO-free or cross-compilation and
+      # the static release binaries break.
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      # main.version is a plain var defaulting to "dev"; the tag replaces it so
+      # `chaio-crewchief version` reports something a bug report can use.
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    # Keep the OS/arch in the name so a downloaded archive is self-describing.
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - src: LICENSE
+        dst: LICENSE
+      - src: README.md
+        dst: README.md
+      - src: gateway/models.yaml
+        dst: models.yaml.example
+      - src: gateway/rates.yaml
+        dst: rates.yaml.example
+      - src: gateway/routing.yaml
+        dst: routing.yaml.example
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+
+# Homebrew casks, not formulae: `brews` is deprecated, and Homebrew now treats
+# casks as the right vehicle for pre-built binaries (formulae are meant to
+# build from source). Casks are macOS-only — Linux users are served by the
+# release archives and scripts/install.sh.
+homebrew_casks:
+  - name: chaio-crewchief
+    ids: [default]
+    binaries: [chaio-crewchief]
+    repository:
+      owner: ChadDahlgren
+      name: homebrew-tap
+      # A fine-grained PAT scoped to ChadDahlgren/homebrew-tap ONLY, with
+      # Contents: Read and write (Metadata: Read is added automatically).
+      # Nothing else — this token's whole job is committing one .rb file.
+      # Stored as the HOMEBREW_TAP_TOKEN secret on this repo; the default
+      # GITHUB_TOKEN is scoped to one repository and cannot write to the tap.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/ChadDahlgren/chaio-crewchief"
+    description: "A deliberately simple, fast, cheap phonebook between your frontier model and a fleet of cheap ones — with a cost ledger"
+    license: "Apache-2.0"
+    commit_author:
+      name: goreleaser
+      email: noreply@github.com
+    hooks:
+      post:
+        # The release binaries are unsigned, so macOS quarantines anything
+        # downloaded via a cask and the first run dies with "cannot be opened
+        # because the developer cannot be verified". Stripping the quarantine
+        # attribute on install is the standard remedy until the binaries are
+        # signed and notarized.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/chaio-crewchief"]
+          end
+    # `brew uninstall --zap` also removes local state. Never listed anywhere
+    # that a plain uninstall would touch — the ledger is the user's data.
+    zap:
+      trash:
+        - "~/.chaio-crewchief"
+    caveats: |
+      Crew Chief needs a model roster before it can do anything:
+
+        mkdir -p ~/.chaio-crewchief && cd ~/.chaio-crewchief
+        curl -fsSLO https://raw.githubusercontent.com/ChadDahlgren/chaio-crewchief/main/gateway/models.yaml
+        chaio-crewchief doctor      # what's misconfigured?
+        chaio-crewchief serve       # binds 127.0.0.1:8181
+
+      serve binds loopback by default. It has NO authentication and reads
+      provider API keys from its environment, so anyone who can reach the
+      port can spend them. Use --addr :8181 only on a trusted network.
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```bash
+    brew install ChadDahlgren/tap/chaio-crewchief
+    ```
+
+    Or grab a binary below and verify it against `checksums.txt`.

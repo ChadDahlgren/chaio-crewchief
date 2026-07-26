@@ -1,0 +1,92 @@
+name: Bug report
+description: Something behaves differently than documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Redact your API keys before pasting anything.**
+
+        `models.yaml` names environment variables rather than holding keys, so
+        the config itself is usually safe — but gateway logs, `curl -v` output,
+        and shell history can contain the real values. Replace anything that
+        looks like a credential with `REDACTED`.
+
+        Found a security vulnerability? Don't file it here — see
+        [SECURITY.md](https://github.com/ChadDahlgren/chaio-crewchief/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        The commands or requests that trigger it. A request body that
+        misbehaves is worth more than a description of one.
+      placeholder: |
+        1. chaio-crewchief serve --models models.yaml
+        2. curl -s localhost:8181/delegate -d '{"task":"..."}'
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `chaio-crewchief version`.
+      placeholder: chaio-crewchief v0.4.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew
+        - scripts/install.sh
+        - Release binary, downloaded manually
+        - go install
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 15 arm64 / Ubuntu 24.04 amd64
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: chaio-crewchief doctor
+      description: Output of `chaio-crewchief doctor`, if the gateway is reachable.
+      render: text
+
+  - type: textarea
+    id: preset
+    attributes:
+      label: Relevant preset
+      description: >
+        The `models.yaml` entry involved, **with any keys or private hostnames
+        replaced by REDACTED**.
+      render: yaml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Gateway logs
+      description: Relevant output from the gateway, redacted.
+      render: text

@@ -1,0 +1,54 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so newly-published queries run against unchanged code. A repo
+    # that only scans on push stops being scanned the moment it goes quiet.
+    - cron: "24 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze Go
+    # Code scanning is free on public repositories and requires GitHub
+    # Advanced Security on private ones. While this repository is private the
+    # analysis runs fine and then fails on upload with "Code scanning is not
+    # enabled for this repository", so skip it rather than ship a permanently
+    # red check. This turns itself on the moment the repository goes public —
+    # no workflow change needed.
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # upload findings
+      actions: read            # read workflow-run metadata; without this the
+                               # analysis succeeds and the upload fails with
+                               # "Resource not accessible by integration"
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          languages: go
+          queries: security-and-quality
+
+      - name: Build
+        working-directory: gateway
+        run: go build ./...
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          category: "/language:go"

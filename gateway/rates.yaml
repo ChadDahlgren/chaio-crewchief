@@ -1,0 +1,21 @@
+# $/1M-token pricing per preset, used by the cost ledger. A model missing
+# here is priced at $0 (local/electricity). Update to current provider rates.
+models:
+  local-coder:
+    input_per_mtok: 0.0
+    output_per_mtok: 0.0
+  cf-gpt-oss-120b:
+    input_per_mtok: 0.35
+    output_per_mtok: 0.75
+  bedrock-gpt-oss-120b:
+    input_per_mtok: 0.15
+    output_per_mtok: 0.60
+  sonnet-5-ref:
+    input_per_mtok: 3.00
+    output_per_mtok: 15.00
+
+# frontier reference rate for the counterfactual ("what would this have cost
+# at frontier prices") — the ledger's headline savings number.
+counterfactual:
+  input_per_mtok: 3.0
+  output_per_mtok: 15.0

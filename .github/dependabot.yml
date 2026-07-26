@@ -1,0 +1,30 @@
+# Dependency updates. Weekly rather than daily: this project has a small
+# dependency tree and a single maintainer, and a noisy bot gets ignored,
+# which is worse than a slower one.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /gateway
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+
+  # Workflow actions are pinned to commit SHAs, so this is the only thing that
+  # will move them — and it moves them to a new SHA with the version in the
+  # comment, rather than silently re-pointing a mutable tag.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - ci

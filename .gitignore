@@ -1,0 +1,19 @@
+# Runtime state — never commit a live database, archive, or log
+chaio-crewchief.db
+chaio-crewchief.db-shm
+chaio-crewchief.db-wal
+/archive/
+/gateway/archive/
+*.log
+
+# Built binaries and release artifacts
+/gateway/chaio-crewchief
+# Unanchored: goreleaser writes ./dist, and a stray gateway/dist can survive
+# from an older config location.
+dist/
+
+# Dependencies
+node_modules/
+
+# OS cruft
+.DS_Store

@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser needs full history and tags to build the changelog.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+
+      # Never publish an untested binary. This duplicates CI deliberately: a
+      # tag can be pushed at a commit CI never ran on.
+      - name: Test first
+        working-directory: gateway
+        run: go test -race -count=1 ./...
+
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT, ChadDahlgren/homebrew-tap only, Contents:write.
+          # GITHUB_TOKEN is scoped to this repository and cannot push the
+          # cask elsewhere. Expires 2027-07-25 — renewal failures surface as
+          # an opaque permissions error, so check this first if a release
+          # suddenly can't publish the cask.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

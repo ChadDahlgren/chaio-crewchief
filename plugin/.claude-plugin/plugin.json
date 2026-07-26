@@ -1,0 +1,26 @@
+{
+  "name": "chaio-crewchief",
+  "displayName": "Hybrid Model Fleet",
+  "version": "0.4.0",
+  "description": "Delegate coding work to a local + cloud model fleet through the Chaio Crew Chief gateway: fleet agents, MCP tools, status/delegate/usage skills, cost ledger.",
+  "author": {
+    "name": "Chad Dahlgren",
+    "email": "me@chad-dahlgren.com"
+  },
+  "keywords": [
+    "chaio-crewchief",
+    "local-llm",
+    "cloudflare",
+    "delegation"
+  ],
+  "mcpServers": {
+    "chaio-crewchief": {
+      "type": "stdio",
+      "command": "chaio-crewchief",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}

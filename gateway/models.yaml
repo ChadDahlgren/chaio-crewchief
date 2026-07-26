@@ -1,0 +1,54 @@
+# Model roster. Each entry is a preset the gateway can delegate to.
+# ${ENV_VARS} in base_url are expanded at load. api_key_env names an env var
+# holding a Bearer token; empty/omitted = unauthenticated (local server).
+# provider_class (local|cloud|frontier) tags the cost ledger.
+# See examples/ for per-provider recipes (llama.cpp, Cloudflare, Anthropic, Bedrock).
+
+models:
+  # ---- local (any OpenAI-compatible server: llama.cpp, vLLM, Ollama...) -----
+  - name: local-coder
+    base_url: http://localhost:8080
+    system_prompt: "You are a code generator. Output ONLY a raw code block. No prose. Write the SIMPLEST correct implementation - prefer built-ins."
+    temperature: 0.3
+    max_tokens: 6000
+    timeout_sec: 600
+    default: true
+
+  # ---- cloud burst (Cloudflare Workers AI) ----------------------------------
+  # env: CF_ACCOUNT_ID, CLOUDFLARE_API_TOKEN (Workers AI scope)
+  - name: cf-gpt-oss-120b
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai
+    model_id: "@cf/openai/gpt-oss-120b"
+    api_key_env: CLOUDFLARE_API_TOKEN
+    health_path: /models/search
+    provider_class: cloud
+    system_prompt: "You are a code generator. Output ONLY a raw code block. No prose. Write the SIMPLEST correct implementation - prefer built-ins."
+    temperature: 0.3
+    max_tokens: 6000
+    timeout_sec: 300
+
+  # ---- cloud burst (Amazon Bedrock, OpenAI-compat endpoint) -----------------
+  # env: AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key); adjust region.
+  - name: bedrock-gpt-oss-120b
+    base_url: https://bedrock-mantle.us-east-1.api.aws
+    model_id: "openai.gpt-oss-120b"
+    api_key_env: AWS_BEARER_TOKEN_BEDROCK
+    health_path: /v1/models
+    provider_class: cloud
+    system_prompt: "You are a code generator. Output ONLY a raw code block. No prose. Write the SIMPLEST correct implementation - prefer built-ins."
+    temperature: 0.3
+    max_tokens: 6000
+    timeout_sec: 300
+
+  # ---- frontier reference (Anthropic, OpenAI-compat endpoint) ---------------
+  # env: ANTHROPIC_API_KEY. omit_temperature required on Claude 4.6+ models.
+  - name: sonnet-5-ref
+    base_url: https://api.anthropic.com
+    model_id: "claude-sonnet-5"
+    api_key_env: ANTHROPIC_API_KEY
+    health_path: /v1/models
+    omit_temperature: true
+    provider_class: frontier
+    system_prompt: "You are a code generator. Output ONLY a raw code block. No prose. Write the SIMPLEST correct implementation - prefer built-ins."
+    max_tokens: 6000
+    timeout_sec: 300

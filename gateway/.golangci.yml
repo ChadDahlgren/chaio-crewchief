@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  default: standard
+  settings:
+    errcheck:
+      # unchecked cleanup in defers is idiomatic; failures there are unactionable
+      exclude-functions:
+        - (io.Closer).Close
+        - os.RemoveAll
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        # writing the error response for a failed response write is circular
+        - (*encoding/json.Encoder).Encode
+        # CLI output to the caller-supplied writer; nothing to do on failure
+        - fmt.Fprintln
+        - fmt.Fprintf
+        # best-effort cleanup paths
+        - os.Remove
+        - (*os.File).Close
+        - (github.com/ChadDahlgren/chaio-crewchief/gateway/internal/store.Store).Close
+        - (*github.com/ChadDahlgren/chaio-crewchief/gateway/internal/store.SQLite).Close
+  exclusions:
+    rules:
+      # test setup: unchecked Record*/seed calls fail loudly in the assertions anyway
+      - path: _test\.go
+        linters: [errcheck]

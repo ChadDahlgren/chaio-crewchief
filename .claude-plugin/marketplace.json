@@ -1,0 +1,8 @@
+{
+  "name": "chaio-crewchief",
+  "owner": { "name": "Chad Dahlgren" },
+  "description": "Hybrid model fleet: delegation gateway, fleet agents, skills",
+  "plugins": [
+    { "name": "chaio-crewchief", "source": "./plugin", "description": "Fleet agents, Crew Chief MCP tools, status/delegate/usage skills" }
+  ]
+}

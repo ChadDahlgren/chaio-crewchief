@@ -1,0 +1,57 @@
+name: Feature request
+description: Suggest a change or addition
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: two design rules are deliberate and unlikely to move.
+
+        **Crew Chief never judges output.** No quality scores, no "did it
+        compile" checks, no retrying because an answer looked wrong. Running
+        model-generated code to grade it means unsandboxed execution on the
+        gateway, and defining "correct" belongs to whoever understands the
+        task. Grading lives in
+        [chaio-bench](https://github.com/ChadDahlgren/chaio-bench).
+
+        **Crew Chief never chooses a model.** `routing.yaml` is a table you
+        maintain, not inference the gateway performs.
+
+        Proposals that move those boundaries are welcome as a *discussion* —
+        just make the case explicitly rather than in a diff.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting?
+      description: >
+        Describe the situation, not the solution. What were you trying to do,
+        and where did the current design get in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried or considered?
+      description: >
+        Including workarounds. A working workaround is useful information —
+        it may be that the answer is documenting it.
+
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Design boundary
+      options:
+        - label: >
+            This does not ask Crew Chief to judge output quality or to choose
+            a model on its own — or if it does, I've explained why that
+            boundary should move.
+          required: true
