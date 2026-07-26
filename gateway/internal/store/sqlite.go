@@ -47,11 +47,24 @@ CREATE TABLE IF NOT EXISTS attempts (
   response_ref TEXT,
   artifact_ref TEXT
 );
+`
 
--- ReapOrphans filters on exactly this pair on every embedded start, which is
--- now once per Claude Code session rather than once per daemon start. The
--- ledger is append-only and grows forever, so the scan it replaces gets slower
--- for the life of the install.
+// postMigrationDDL holds schema objects that depend on columns a migration
+// adds, and so cannot live in schemaDDL.
+//
+// schemaDDL runs before applyMigrations, and on any database that already
+// exists its CREATE TABLE IF NOT EXISTS statements no-op — the table keeps
+// whatever columns it had. An index over owner_host therefore met a requests
+// table without owner_host on every ledger the previous release created, and
+// Open failed at the DDL step before migration 4 could add the column. That is
+// every existing install, deterministically, with no way out but sqlite3 by
+// hand. Anything referencing a migrated column belongs here, after migrations.
+//
+// The index itself: ReapOrphans filters on exactly this pair on every embedded
+// start, which is now once per Claude Code session rather than once per daemon
+// start. The ledger is append-only and grows forever, so the scan it replaces
+// gets slower for the life of the install.
+const postMigrationDDL = `
 CREATE INDEX IF NOT EXISTS idx_requests_owner_status ON requests (owner_host, status);
 `
 
@@ -294,6 +307,11 @@ func openOnce(path string) (*SQLite, error) {
 	if err := applyMigrations(ctx, db); err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	if _, err := db.ExecContext(ctx, postMigrationDDL); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to execute post-migration schema DDL: %w", err)
 	}
 
 	return &SQLite{db: db}, nil

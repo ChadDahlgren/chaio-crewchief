@@ -155,6 +155,138 @@ func TestConcurrentOpenOnFreshDatabase(t *testing.T) {
 	}
 }
 
+// v0.4.0's requests/attempts DDL, copied literally rather than derived from
+// schemaDDL by any transformation.
+//
+// Deriving it — as TestConcurrentOpenOnLegacyJournalDatabase does — is what let
+// a ledger-breaking bug ship green: a "legacy" table built by string-replacing
+// today's schemaDDL still has every column today's schemaDDL grew, so it never
+// exercises the case where openOnce's DDL references a column only a migration
+// adds. This constant must never be regenerated from schemaDDL.
+const v040DDL = `
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+
+CREATE TABLE requests (
+  id TEXT PRIMARY KEY,
+  task TEXT NOT NULL,
+  model TEXT,
+  mode TEXT,
+  tests TEXT,
+  lang TEXT,
+  async INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  artifact TEXT NOT NULL DEFAULT '',
+  escalation TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE attempts (
+  id TEXT PRIMARY KEY,
+  request_id TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  model TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  wall_ms INTEGER NOT NULL,
+  prompt_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  tok_per_sec REAL NOT NULL,
+  verdict TEXT NOT NULL,
+  verdict_info TEXT,
+  prompt_ref TEXT,
+  response_ref TEXT,
+  artifact_ref TEXT,
+  provider_class TEXT NOT NULL DEFAULT 'local',
+  cost_usd REAL NOT NULL DEFAULT 0
+);
+`
+
+// writeV040Ledger builds a database exactly as the previous release left it:
+// migrations 1-3 applied and recorded, no ownership columns, one row of real
+// data. Returns the path.
+func writeV040Ledger(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "v040.db")
+	ctx := context.Background()
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, v040DDL); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []int{1, 2, 3} {
+		if _, err := db.ExecContext(ctx,
+			"INSERT INTO schema_migrations (version, applied_at) VALUES (?, '2026-01-01T00:00:00Z')", v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO requests (id, task, model, mode, tests, lang, async, status, created_at)
+		 VALUES ('old', 'classify email', 'm', '', '', 'go', 0, 'delivered', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO attempts (id, request_id, stage, model, started_at, wall_ms, prompt_tokens,
+		   output_tokens, tok_per_sec, verdict, provider_class, cost_usd)
+		 VALUES ('old-a', 'old', '', 'm', '2026-01-01T00:00:00Z', 10, 5, 5, 1.0, 'delivered', 'cloud', 2.50)`); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The whole install — serve, mcp, usage, doctor — goes through Open, so a
+// database the previous release created must open on this branch. It did not:
+// schemaDDL carried an index over owner_host, a column migration 4 adds, and
+// openOnce runs schemaDDL before applyMigrations. CREATE TABLE IF NOT EXISTS
+// no-ops on the existing table, so the index statement hit a column that was
+// not there yet and Open failed every time, before the migration that would
+// have fixed it could run.
+func TestOpenUpgradesV040Ledger(t *testing.T) {
+	path := writeV040Ledger(t)
+	ctx := context.Background()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() on a v0.4.0 ledger error = %v, want nil", err)
+	}
+	defer st.Close()
+
+	rec, ok, err := st.GetRequest(ctx, "old")
+	if err != nil || !ok {
+		t.Fatalf("GetRequest() = %v, %v, %v; want the pre-existing row to survive", rec, ok, err)
+	}
+	if rec.Status != types.StatusDelivered {
+		t.Errorf("status = %q, want %q", rec.Status, types.StatusDelivered)
+	}
+
+	// The upgrade has to be complete, not merely non-fatal: migration 4's
+	// columns and the index that depends on them must both exist afterwards.
+	var owners int
+	if err := st.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_table_info('requests') WHERE name IN ('owner_pid','owner_host')").Scan(&owners); err != nil {
+		t.Fatal(err)
+	}
+	if owners != 2 {
+		t.Errorf("requests has %d owner columns after Open, want 2", owners)
+	}
+
+	var idx int
+	if err := st.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_requests_owner_status'").Scan(&idx); err != nil {
+		t.Fatal(err)
+	}
+	if idx != 1 {
+		t.Errorf("idx_requests_owner_status present = %d, want 1", idx)
+	}
+
+	// And the ledger has to still report the money it recorded before.
+	if err := st.RecordRequest(ctx, "new", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Errorf("RecordRequest() after upgrade error = %v", err)
+	}
+}
+
 // Legacy ledgers are still on the rollback journal, so their first embedded
 // open performs the WAL conversion under contention — the same exclusive lock,
 // reached by a different route than a brand-new file.
