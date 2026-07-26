@@ -21,6 +21,15 @@ between minor versions. Breaking changes will always be called out here.
 
 ### Changed
 
+- `usage` no longer reports a missing counterfactual as `savings: $0.00 (0.0%)`.
+  With no `rates.yaml` there is no frontier price to compare against, so it
+  prints `savings: n/a` with the reason and no percentage at all; the same goes
+  for a ledger with no attempts yet. When a run cost more than the frontier
+  would have, it is reported as `overspend` with a ratio rather than as
+  negative savings with an unbounded percentage. `GET /stats` gained
+  `counterfactual_configured` to carry the distinction over the wire, since a
+  real zero and an absent rates table are otherwise identical. Negative dollar
+  amounts now print as `-$3.75` rather than `$-3.7500`.
 - **Breaking:** an unset `CHAIO_CREWCHIEF_URL` now selects embedded mode rather
   than defaulting to `http://localhost:8181`. Set the variable explicitly to
   keep proxying to a gateway.
@@ -56,20 +65,27 @@ between minor versions. Breaking changes will always be called out here.
   now return 500 where it previously returned an artifact — in practice only
   when the ledger is unwritable or locked past the retry budget. This guards
   request bookkeeping, not spend: attempt rows, which carry the cost, are still
-  best-effort and now log loudly when they fail rather than aborting work whose
-  tokens are already billed.
+  best-effort. A failed attempt write used to be discarded silently; it is now
+  logged loudly. It has never aborted the delegation, whose tokens are already
+  billed either way.
 - Schema migrations now run inside a transaction each, taken with
-  `BEGIN IMMEDIATE`, so an interrupted upgrade leaves the database exactly as
-  it was rather than half-migrated with nothing recorded — a state that used to
-  brick the ledger until someone hand-edited `schema_migrations`. Databases
+  `BEGIN IMMEDIATE`, so an interruption leaves the database at a migration
+  boundary — the last one that committed — rather than half-migrated with
+  nothing recorded, a state that used to brick the ledger until someone
+  hand-edited `schema_migrations`. This is per migration, not per upgrade: an
+  interruption partway through a multi-step upgrade lands consistently at an
+  earlier version, not back at the original one. Databases
   already in that state heal themselves on the next open. `Open` also retries a
   locked database with a short backoff, since embedded mode makes concurrent
   first-opens normal and the WAL conversion takes a lock `busy_timeout` does
   not cover.
 - Embedded mode logs a warning on every start when no `rates.yaml` is present,
-  naming the path it looked for. Without a rates table every attempt prices at
-  $0, and `usage` reporting $0.00 spend and 0% savings is otherwise
-  indistinguishable from a fleet that is genuinely free.
+  naming the path it looked for. Without a rates table there is no frontier
+  price to compare against, so the savings number — the thing the tool exists
+  to report — cannot be computed at all. A fresh ledger otherwise looks like a
+  fleet that is genuinely free; an existing ledger that accumulated real costs
+  looks worse still, since `cost_usd` is priced per attempt at write time and
+  never recomputed, leaving positive spend measured against nothing.
 - `serve` now creates a `locks/` directory alongside its `--db` and takes an
   ownership lock inside it, so a process can tell whether the owner of an
   in-flight ledger row is still alive. This is a new writable-directory

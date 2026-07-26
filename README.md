@@ -15,10 +15,14 @@ Every attempt lands in a **cost ledger** priced against what the same
 tokens would have cost at frontier rates, so "what did the fleet save me"
 is a queryable number (`chaio-crewchief usage`), not a vibe.
 
-Pricing is opt-in: the ledger records every attempt either way, but until a
-`rates.yaml` sits next to your config, every attempt prices at $0.00 against a
-$0.00 counterfactual and `usage` reports `savings: $0.00 (0.0%)`. `init` does
-not write one. Copy [`gateway/rates.yaml`](gateway/rates.yaml) to
+Pricing is opt-in: the ledger records every attempt either way, but without a
+`rates.yaml` next to your config there is no frontier price to compare against,
+so `usage` reports `savings: n/a` and names the missing file rather than
+inventing a percentage. `init` does not write one. Note that `cost_usd` is
+priced per attempt at write time and never recomputed, so a fresh ledger shows
+$0.00 spend while a ledger that accumulated real costs under a rates file keeps
+showing that spend if the file later goes missing — the same `n/a`, above a
+non-zero number. Copy [`gateway/rates.yaml`](gateway/rates.yaml) to
 `~/.chaio-crewchief/rates.yaml` and edit it to your presets and current
 provider prices — step 3 below.
 
@@ -83,9 +87,9 @@ Workers AI endpoint, anything OpenAI-compatible — and name the environment
 variable holding the token in `api_key_env`. Keys live in the environment,
 never in the file. Working recipes are in [`examples/`](examples/).
 
-Then, if you want the cost ledger to report anything but zero, add a rates
-file — `init` does not write one, and a missing one prices every attempt at
-$0.00 against a $0.00 counterfactual:
+Then, if you want the cost ledger to report savings at all, add a rates file —
+`init` does not write one, and without one new attempts price at $0.00, there
+is no counterfactual, and `usage` reports `savings: n/a`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ChadDahlgren/chaio-crewchief/main/gateway/rates.yaml \

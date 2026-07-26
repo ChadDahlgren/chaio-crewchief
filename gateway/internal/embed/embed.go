@@ -98,10 +98,13 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 	}
 	// `serve` has warned about this since it shipped; embedded mode did not,
 	// and embedded mode is the path a new user actually takes. Without rates
-	// every attempt prices at $0 and the frontier counterfactual is $0 too, so
-	// `usage` reports "savings: $0.00 (0.0%)" — a number that looks like an
-	// answer rather than a missing input. Not fatal: a purely local roster is a
-	// legitimate way to run, and the ledger is still correct about tokens.
+	// there is no frontier price, so `usage` can only report "savings: n/a".
+	// On a fresh ledger new attempts also price at $0; on a ledger that
+	// accumulated costs under a rates file that has since gone missing the
+	// recorded spend stays put, because cost_usd is priced per attempt at
+	// write time and never recomputed — so that n/a sits above a real number.
+	// Not fatal: a purely local roster is a legitimate way to run, and the
+	// ledger is still correct about tokens.
 	if _, statErr := os.Stat(p.Rates); statErr != nil {
 		log.Printf("warning: rates file %s not found, all attempts price at $0 (local)", p.Rates)
 	}
