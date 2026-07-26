@@ -105,7 +105,9 @@ Claude Code plugin.
   listener binding anything other than `127.0.0.1` or outliving its session.
 - Vulnerabilities in models or providers Crew Chief talks to.
 - Anything requiring an attacker who already has shell access on the gateway
-  box — at that point the API keys are readable directly.
+  box *as the same user* — at that point the API keys are readable directly.
+  A *different* local user is in scope: the embedded listener is the case where
+  someone who cannot read your keys can still spend them through you.
 
 ## Supported versions
 

@@ -119,6 +119,12 @@ forces the embedded one under `~/.chaio-crewchief`, `--gateway` forces the one
 behind `CHAIO_CREWCHIEF_URL`. Both ledgers are real and they hold different
 work, so name the one you mean when it matters.
 
+`--local` is not as read-only as it looks: answering from the local ledger means
+starting a real embedded instance, so `usage --local` and `doctor --local` open
+a loopback listener, take the ownership lock, and run the startup reaper — which
+writes to the ledger, failing any request left running by a process that has
+since exited.
+
 Everything else in the repo is optional equipment: `plugin/` (Claude Code
 plugin: fleet agents + skills) and `examples/` (per-provider recipes).
 

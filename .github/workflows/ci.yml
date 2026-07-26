@@ -176,7 +176,7 @@ jobs:
       # env cannot silently turn this back into a proxy test.
       - name: Embedded MCP starts with no gateway and no config
         env:
-          CHAIO_CREWCHIEF_HOME: /tmp/embedded-home
+          CHAIO_CREWCHIEF_HOME: /tmp/embedded-home-mcp
         run: |
           unset CHAIO_CREWCHIEF_URL CREWCHIEF_URL DISPATCH_URL
           out=$({ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n'
@@ -184,15 +184,18 @@ jobs:
             printf '{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
             sleep 2; } | /tmp/chaio-crewchief mcp)
           echo "$out" | grep -q crewchief_delegate
-          test -d /tmp/embedded-home
-          test ! -f /tmp/embedded-home/models.yaml   # startup must never write config
+          test -d /tmp/embedded-home-mcp
+          test ! -f /tmp/embedded-home-mcp/models.yaml   # startup must never write config
 
+      # Its own home, not the previous step's: this step leaves a models.yaml
+      # behind, and a re-run of the job would then fail that step's
+      # "startup must never write config" assertion for the wrong reason.
       - name: init writes a starter config and refuses to clobber it
         env:
-          CHAIO_CREWCHIEF_HOME: /tmp/embedded-home
+          CHAIO_CREWCHIEF_HOME: /tmp/embedded-home-init
         run: |
           /tmp/chaio-crewchief init
-          test -f /tmp/embedded-home/models.yaml
+          test -f /tmp/embedded-home-init/models.yaml
           if /tmp/chaio-crewchief init; then echo "init overwrote without --force"; exit 1; fi
           /tmp/chaio-crewchief init --force
 
