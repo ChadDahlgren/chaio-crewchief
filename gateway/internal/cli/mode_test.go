@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"testing"
 
@@ -13,14 +14,14 @@ func TestModeFlags(t *testing.T) {
 		envURL   string
 		args     []string
 		wantMode gwurl.Mode
-		wantErr  bool
+		wantErr  error
 	}{
 		{name: "no env, no flag", envURL: "", args: nil, wantMode: gwurl.ModeEmbedded},
 		{name: "env set", envURL: "http://gx10:8181", args: nil, wantMode: gwurl.ModeGateway},
 		{name: "--local overrides env", envURL: "http://gx10:8181", args: []string{"--local"}, wantMode: gwurl.ModeEmbedded},
 		{name: "--gateway with env", envURL: "http://gx10:8181", args: []string{"--gateway"}, wantMode: gwurl.ModeGateway},
-		{name: "--gateway with no URL is an error", envURL: "", args: []string{"--gateway"}, wantErr: true},
-		{name: "both flags is an error", envURL: "", args: []string{"--local", "--gateway"}, wantErr: true},
+		{name: "--gateway with no URL is an error", envURL: "", args: []string{"--gateway"}, wantErr: ErrNoGatewayURL},
+		{name: "both flags is an error", envURL: "", args: []string{"--local", "--gateway"}, wantErr: ErrModeConflict},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -35,9 +36,9 @@ func TestModeFlags(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 			mode, _, err := mf.Resolve()
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("Resolve() = nil error, want error")
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Resolve() error = %v, want %v", err, tt.wantErr)
 				}
 				return
 			}

@@ -7,6 +7,13 @@ import (
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/gwurl"
 )
 
+// ErrModeConflict is returned when --local and --gateway are both given.
+var ErrModeConflict = errors.New("--local and --gateway are mutually exclusive")
+
+// ErrNoGatewayURL is returned when --gateway is given but no gateway URL is
+// set in the environment.
+var ErrNoGatewayURL = errors.New("--gateway given but no gateway URL is set; export CHAIO_CREWCHIEF_URL")
+
 // ModeFlags let a subcommand override the environment's choice of ledger.
 //
 // A user with CHAIO_CREWCHIEF_URL exported would otherwise have no way to look
@@ -26,7 +33,7 @@ func (m *ModeFlags) Register(fs *flag.FlagSet) {
 // Resolve reports the mode to use and, in gateway mode, the URL.
 func (m *ModeFlags) Resolve() (gwurl.Mode, string, error) {
 	if m.local && m.gateway {
-		return "", "", errors.New("--local and --gateway are mutually exclusive")
+		return "", "", ErrModeConflict
 	}
 	envMode, url := gwurl.Resolve()
 	switch {
@@ -34,7 +41,7 @@ func (m *ModeFlags) Resolve() (gwurl.Mode, string, error) {
 		return gwurl.ModeEmbedded, "", nil
 	case m.gateway:
 		if url == "" {
-			return "", "", errors.New("--gateway given but no gateway URL is set; export CHAIO_CREWCHIEF_URL")
+			return "", "", ErrNoGatewayURL
 		}
 		return gwurl.ModeGateway, url, nil
 	default:

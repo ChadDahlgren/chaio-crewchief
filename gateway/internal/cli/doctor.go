@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -135,7 +136,22 @@ func Doctor(w io.Writer, args []string) int {
 	var mf ModeFlags
 	mf.Register(fs)
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
+	}
+
+	// flag.Parse stops at the first non-flag argument, so a flag typed after
+	// the env-file path lands in fs.Args() unparsed and would otherwise be
+	// silently dropped — reporting success for something that never happened.
+	// Refuse instead of guessing at the user's intent.
+	rest := fs.Args()
+	for _, a := range rest {
+		if strings.HasPrefix(a, "-") {
+			fmt.Fprintf(w, "error: flags must come before the env file argument; got %q after it\n", a)
+			return 2
+		}
 	}
 
 	mode, base, err := mf.Resolve()
@@ -144,7 +160,6 @@ func Doctor(w io.Writer, args []string) int {
 		return 2
 	}
 
-	var inst *embed.Instance
 	if mode == gwurl.ModeEmbedded {
 		paths, err := chome.Resolve()
 		if err != nil {
@@ -152,7 +167,7 @@ func Doctor(w io.Writer, args []string) int {
 			return 1
 		}
 		fmt.Fprintf(w, "mode: embedded (home %s)\n", paths.Home)
-		inst, err = embed.Start(context.Background(), embed.Config{Paths: paths})
+		inst, err := embed.Start(context.Background(), embed.Config{Paths: paths})
 		if err != nil {
 			fmt.Fprintf(w, "error: start embedded gateway: %v\n", err)
 			return 1
@@ -169,7 +184,6 @@ func Doctor(w io.Writer, args []string) int {
 			env[kv[:eq]] = kv[eq+1:]
 		}
 	}
-	rest := fs.Args()
 	if len(rest) > 0 {
 		data, err := os.ReadFile(rest[0])
 		if err != nil {
