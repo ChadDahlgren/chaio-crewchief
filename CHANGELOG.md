@@ -27,6 +27,22 @@ between minor versions. Breaking changes will always be called out here.
 - `~/.chaio-crewchief/` (or `CHAIO_CREWCHIEF_HOME`) is the default location for
   config and the ledger when paths are not given as flags. `serve`'s flags are
   unchanged.
+- `fleet-statusline.sh` no longer falls back to `http://localhost:8181` when
+  `CHAIO_CREWCHIEF_URL` is unset; it now passes the inner statusline through
+  untouched. Embedded mode has no fixed address to curl — the gateway runs
+  in-process on a kernel-assigned ephemeral loopback port — so embedded-mode
+  users get no fleet statusline. This is a deliberate trade, not an
+  improvement: silence beats a false "gateway unreachable" on every prompt of
+  a session where delegation is working fine.
+- The ledger opens with `journal_mode=WAL` and a `busy_timeout` instead of the
+  default rollback journal, since embedded mode made it multi-writer by
+  design. On an existing deployment, the mode is persisted into the database
+  file the first time it's opened by the new binary, and two sibling files,
+  `-wal` and `-shm`, appear next to it from then on — the containing
+  directory needs to be writable, which the rollback journal already
+  required, so this adds no new permission requirement. WAL needs shared
+  memory and does not work on NFS; a ledger on a network filesystem must stay
+  on the old journal mode (`PRAGMA journal_mode=DELETE` reverts it).
 
 ### Security
 
