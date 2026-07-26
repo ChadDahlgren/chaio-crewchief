@@ -233,11 +233,23 @@ func dsn(path string) string {
 	return path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 }
 
-// openAttempts bounds the retry described on Open. Ten tries with the backoff
-// below spans a little over a second, comfortably longer than the WAL
-// conversion it is waiting on, and still far short of a hang a user would
-// notice as the MCP server failing to come up.
-const openAttempts = 10
+// openAttempts bounds the retry described on Open. Twenty-five tries with the
+// 20ms*(i+1) backoff below spans about 6.5s.
+//
+// It used to be ten, about 1.1s, sized against the WAL conversion itself —
+// microseconds of exclusive lock. That was the wrong thing to size against.
+// The conversion cannot start while another process holds the database, so the
+// real wait is however long that other writer takes, and on a pre-WAL ledger
+// nothing shortens it: busy_timeout does not cover the exclusive lock the
+// conversion needs. A writer holding a legacy database for longer than a
+// second made Open give up with "database is locked" — and the first open
+// after upgrading is exactly when every install passes through this window.
+//
+// The budget now exceeds the 5s busy_timeout in dsn, so the pre-WAL case is no
+// longer the impatient one: once the database is in WAL, busy_timeout absorbs
+// the collision first and this retry never runs. 6.5s is still short enough
+// that a genuinely stuck ledger surfaces as an error rather than a hang.
+const openAttempts = 25
 
 // isLocked reports whether err is SQLite's transient busy/locked condition,
 // the only class of failure Open retries. Anything else — a bad path, a corrupt
