@@ -126,12 +126,19 @@ func Usage(w io.Writer, args []string) int {
 		fmt.Fprintf(w, "error: %v\n", err)
 		return 2
 	}
+	// Name the ledger before rendering it, the way doctor does. Two ledgers
+	// produce visually identical reports, and the likeliest upgrade surprise is
+	// someone who relied on the old implicit localhost:8181 default now reading
+	// an empty local ledger and concluding their data is gone. A totals line of
+	// zeros under "mode: embedded (home ...)" is a wrong-ledger diagnosis; the
+	// same line alone is not.
 	if mode == gwurl.ModeEmbedded {
 		paths, err := chome.Resolve()
 		if err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
 			return 1
 		}
+		fmt.Fprintf(w, "mode: embedded (home %s)\n", paths.Home)
 		inst, err := embed.Start(context.Background(), embed.Config{Paths: paths})
 		if err != nil {
 			fmt.Fprintf(w, "error: start embedded gateway: %v\n", err)
@@ -139,6 +146,8 @@ func Usage(w io.Writer, args []string) int {
 		}
 		defer inst.Close()
 		base = inst.BaseURL
+	} else {
+		fmt.Fprintf(w, "mode: gateway (%s)\n", base)
 	}
 
 	var s statsResp
