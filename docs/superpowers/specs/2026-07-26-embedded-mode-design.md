@@ -58,14 +58,16 @@ default must set the variable explicitly. Goes in CHANGELOG under *Changed*.
 A new `internal/embed` package owns the component wiring:
 
 ```go
-type Config struct { Home string }   // resolved home directory
+type Config struct { Paths chome.Paths }
 
 type Instance struct {
-    BaseURL string        // http://127.0.0.1:<kernel-assigned port>
-    Close   func() error  // shut the listener, close the store
+    BaseURL          string             // http://127.0.0.1:<kernel-assigned port>
+    Owner            *ownership.Owner   // this process's claim, held for the instance's life
+    ModelsConfigured bool               // false → running, but delegation refuses with guidance
 }
 
 func Start(ctx context.Context, cfg Config) (*Instance, error)
+func (i *Instance) Close() error   // shut the listener, release the lock, close the store
 ```
 
 `Start` performs the same sequence `serve()` does today — registry, rates,
