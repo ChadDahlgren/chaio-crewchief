@@ -12,8 +12,10 @@
 #   ls -d ~/.claude/plugins/cache/*/*/*/scripts/fleet-statusline.sh
 # Set FLEET_INNER_STATUSLINE to your previous script to keep its output.
 #
-# Requires CHAIO_CREWCHIEF_URL. Without it, this script appends nothing and
-# passes the inner statusline through untouched.
+# Requires CHAIO_CREWCHIEF_URL to fetch. Without it, this script fetches
+# nothing and passes the inner statusline through untouched — except that a
+# cache entry written less than 60s ago is still rendered, so unsetting the
+# variable mid-session leaves the last reading on screen until it ages out.
 #
 # The reason is that there is nothing for a shell script to query otherwise.
 # Crew Chief's default is a gateway embedded in the MCP process on an ephemeral
@@ -46,14 +48,21 @@ fi
 if [ -z "$fresh" ] && [ -n "${CHAIO_CREWCHIEF_URL:-}" ]; then
   stats=$(curl -s -m 2 "${CHAIO_CREWCHIEF_URL%/}/stats" 2>/dev/null)
   if [ -n "$stats" ]; then
-    # No rates table means no frontier price, so there is no percentage to
-    # report — "0% saved" would be a claim, not a reading. Same for a ledger
-    # with no attempts, and for a run that cost more than the frontier would
-    # have, which is not savings at all.
+    # No frontier reference rate means no price to compare against, so there is
+    # no percentage to report — "0% saved" would be a claim, not a reading. Same
+    # for a ledger with no attempts, and for a run that cost more than the
+    # frontier would have, which is not savings at all.
+    #
+    # counterfactual_usd is tested before counterfactual_configured because a
+    # pre-0.5 gateway omits the flag entirely, leaving it null beside a real,
+    # priced counterfactual — and this script only ever runs in gateway mode, so
+    # a gateway older than the plugin is the normal case, not the edge one.
+    # Ordering the flag first rendered "savings n/a: no rates.yaml" over a
+    # ledger with 98% real savings.
     fresh=$(echo "$stats" | jq -r '.totals |
       "fleet: $\(.cost_usd|.*100|round/100)" as $spend |
-      if (.counterfactual_configured != true) then "\($spend) (savings n/a: no rates.yaml)"
-      elif (.attempts == 0) then "\($spend) (savings n/a: no attempts)"
+      if (.attempts == 0) then "\($spend) (savings n/a: no attempts)"
+      elif (.counterfactual_usd <= 0 and .counterfactual_configured != true) then "\($spend) (savings n/a: no frontier rate)"
       elif (.counterfactual_usd <= 0) then "\($spend) (savings n/a)"
       elif (.cost_usd > .counterfactual_usd) then "\($spend) vs $\(.counterfactual_usd|round) (over frontier)"
       else "\($spend) vs $\(.counterfactual_usd|round) (\(.savings_pct*100|round)% saved)"
