@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 
@@ -32,6 +33,11 @@ type statsResp struct {
 		CostUSD           float64 `json:"cost_usd"`
 		CounterfactualUSD float64 `json:"counterfactual_usd"`
 		SavingsPct        float64 `json:"savings_pct"`
+		// False when the gateway has no rates table loaded, i.e. the two
+		// fields above are absent rather than measured. Absent from a
+		// pre-0.5 gateway's JSON, which decodes to false — the same
+		// conservative "unknown" this field means.
+		CounterfactualConfigured bool `json:"counterfactual_configured"`
 	} `json:"totals"`
 }
 
@@ -84,15 +90,52 @@ func RenderUsage(s statsResp) string {
 	fmt.Fprintf(&b, "attempts: %d   tokens: %s in / %s out\n", t.Attempts, thousands(t.PromptTokens), thousands(t.OutputTokens))
 	fmt.Fprintf(&b, "spend:    %s\n", money(t.CostUSD))
 	fmt.Fprintf(&b, "frontier counterfactual: %s\n", money(t.CounterfactualUSD))
-	fmt.Fprintf(&b, "savings:  %s (%.1f%%)\n", money(t.CounterfactualUSD-t.CostUSD), t.SavingsPct*100)
+	b.WriteString(savingsLine(s))
 	return b.String()
 }
 
-func money(v float64) string {
-	if v >= 1 || v == 0 {
-		return fmt.Sprintf("$%.2f", v)
+// savingsLine renders the headline number. It is the product, so it refuses to
+// state anything it cannot support: no rates table means there is no frontier
+// price to compare against, and no comparison means no percentage — "n/a" with
+// a reason is a real answer where "0.0%" would be a false one. When the local
+// run cost more than the frontier would have, that is not savings and is not
+// reported as such; a ratio is used instead of a percentage because an
+// overspend has no upper bound and reads absurdly as one (-3749900.0%).
+func savingsLine(s statsResp) string {
+	t := s.Totals
+	switch {
+	case !t.CounterfactualConfigured:
+		return "savings:  n/a — no rates.yaml, so there is no frontier price to compare against\n"
+	case t.Attempts == 0:
+		return "savings:  n/a — no attempts recorded yet\n"
+	case !finite(t.CostUSD) || !finite(t.CounterfactualUSD):
+		return "savings:  n/a — the ledger totals are not a usable number\n"
+	case t.CounterfactualUSD <= 0:
+		return "savings:  n/a — the frontier counterfactual priced to $0.00, so there is nothing to compare against\n"
+	case t.CostUSD > t.CounterfactualUSD:
+		return fmt.Sprintf("overspend: %s — this ran %.1fx the frontier price, not below it\n",
+			money(t.CostUSD-t.CounterfactualUSD), t.CostUSD/t.CounterfactualUSD)
+	default:
+		return fmt.Sprintf("savings:  %s (%.1f%%)\n", money(t.CounterfactualUSD-t.CostUSD), t.SavingsPct*100)
 	}
-	return fmt.Sprintf("$%.4f", v)
+}
+
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// money formats a dollar amount, applying the decimal rule to the magnitude so
+// the sign lands outside the currency symbol: -$3.75, not $-3.7500.
+func money(v float64) string {
+	if !finite(v) {
+		return "n/a"
+	}
+	sign := ""
+	if v < 0 {
+		sign, v = "-", -v
+	}
+	if v >= 1 || v == 0 {
+		return fmt.Sprintf("%s$%.2f", sign, v)
+	}
+	return fmt.Sprintf("%s$%.4f", sign, v)
 }
 
 func thousands(n int64) string {

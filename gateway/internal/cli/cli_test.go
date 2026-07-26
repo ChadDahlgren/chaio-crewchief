@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -90,10 +91,113 @@ func TestRenderUsageShape(t *testing.T) {
 	s.Totals.CostUSD = 0.5
 	s.Totals.CounterfactualUSD = 10
 	s.Totals.SavingsPct = 0.95
+	s.Totals.CounterfactualConfigured = true
 	out := RenderUsage(s)
-	for _, want := range []string{"CREW CHIEF USAGE", "1,234,567", "$0.50", "$9.50 (95.0%)"} {
+	for _, want := range []string{"CREW CHIEF USAGE", "1,234,567", "$0.50", "savings:  $9.50 (95.0%)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestMoneySign(t *testing.T) {
+	for _, tc := range []struct {
+		in   float64
+		want string
+	}{
+		{0, "$0.00"},
+		{3.75, "$3.75"},
+		{0.5, "$0.5000"},
+		{-3.75, "-$3.75"},
+		{-0.5, "-$0.5000"},
+		{math.NaN(), "n/a"},
+		{math.Inf(1), "n/a"},
+		{math.Inf(-1), "n/a"},
+	} {
+		if got := money(tc.in); got != tc.want {
+			t.Errorf("money(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The savings number is the product; each of these is a shape it must not
+// misreport. "n/a" with a reason is a real answer, "0.0%" beside a negative
+// dollar figure is two contradictory claims.
+func TestSavingsLine(t *testing.T) {
+	mk := func(attempts int, cost, cf float64, configured bool, pct float64) statsResp {
+		var s statsResp
+		s.Totals.Attempts = attempts
+		s.Totals.CostUSD = cost
+		s.Totals.CounterfactualUSD = cf
+		s.Totals.CounterfactualConfigured = configured
+		s.Totals.SavingsPct = pct
+		return s
+	}
+	tests := []struct {
+		name    string
+		s       statsResp
+		want    string
+		absent  []string
+		present []string
+	}{
+		{
+			name:   "no rates table, ledger has real spend",
+			s:      mk(12, 3.75, 0, false, 0),
+			want:   "savings:  n/a — no rates.yaml, so there is no frontier price to compare against\n",
+			absent: []string{"%", "0.0"},
+		},
+		{
+			name:   "zero attempts",
+			s:      mk(0, 0, 0, true, 0),
+			want:   "savings:  n/a — no attempts recorded yet\n",
+			absent: []string{"%"},
+		},
+		{
+			name: "normal savings",
+			s:    mk(3, 0.10, 5, true, 0.98),
+			want: "savings:  $4.90 (98.0%)\n",
+		},
+		{
+			name:    "cost above counterfactual is overspend, not savings",
+			s:       mk(3, 10, 1, true, -9),
+			absent:  []string{"savings", "%"},
+			present: []string{"overspend: $9.00", "10.0x"},
+		},
+		{
+			name:    "partial rates: tiny counterfactual reads as a ratio, not -3749900%",
+			s:       mk(9, 3.75, 0.0001, true, -37499),
+			absent:  []string{"%"},
+			present: []string{"overspend:"},
+		},
+		{
+			name:   "counterfactual priced to zero with attempts present",
+			s:      mk(9, 3.75, 0, true, 0),
+			want:   "savings:  n/a — the frontier counterfactual priced to $0.00, so there is nothing to compare against\n",
+			absent: []string{"%"},
+		},
+		{
+			name:   "non-finite totals never reach the user as $NaN",
+			s:      mk(2, math.NaN(), 5, true, math.NaN()),
+			want:   "savings:  n/a — the ledger totals are not a usable number\n",
+			absent: []string{"NaN", "%"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := savingsLine(tt.s)
+			if tt.want != "" && got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+			for _, a := range tt.absent {
+				if strings.Contains(got, a) {
+					t.Errorf("line must not contain %q: %q", a, got)
+				}
+			}
+			for _, p := range tt.present {
+				if !strings.Contains(got, p) {
+					t.Errorf("line must contain %q: %q", p, got)
+				}
+			}
+		})
 	}
 }

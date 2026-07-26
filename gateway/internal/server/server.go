@@ -25,7 +25,10 @@ type Engine interface {
 // in the ledger would have cost had the same tokens been billed at the
 // frontier rate in rates.yaml — alongside what they actually cost, so the
 // difference between the two is the number `chaio-crewchief usage` reports as
-// savings. Both are 0 when no rates table is loaded.
+// savings. Both are 0 when no rates table is loaded — and because a ledger with
+// zero attempts also reports 0, counterfactual_configured says which of the two
+// it is, so a reader can tell "no frontier price to compare against" from a
+// genuine break-even.
 type StatsResponse struct {
 	Rows   []types.StatRow `json:"rows"`
 	Totals StatsTotalsView `json:"totals"`
@@ -38,10 +41,14 @@ type StatsTotalsView struct {
 	CostUSD           float64 `json:"cost_usd"`
 	CounterfactualUSD float64 `json:"counterfactual_usd"`
 	SavingsPct        float64 `json:"savings_pct"`
+	// CounterfactualConfigured is false when no rates table is loaded, i.e.
+	// counterfactual_usd and savings_pct carry no information at all rather
+	// than reporting a measured zero.
+	CounterfactualConfigured bool `json:"counterfactual_configured"`
 }
 
 // New wires the HTTP handler. rt may be nil, in which case counterfactual_usd
-// and savings_pct are always 0.
+// and savings_pct are always 0 and counterfactual_configured is false.
 func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver, rt rates.Table) http.Handler {
 	mux := http.NewServeMux()
 
@@ -181,6 +188,7 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 			CostUSD:      totals.CostUSD,
 		}
 		if rt != nil {
+			view.CounterfactualConfigured = true
 			view.CounterfactualUSD = rt.Counterfactual(int(totals.PromptTokens), int(totals.OutputTokens))
 		}
 		if view.CounterfactualUSD > 0 {
