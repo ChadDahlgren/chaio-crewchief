@@ -55,6 +55,12 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 		if !req.Async {
 			res, err := eng.Run(r.Context(), req)
 			if err != nil {
+				// async defaults to false, so this is the common path — and it
+				// was the silent one: the engine's carefully worded failures
+				// ("record request in ledger: ...") reached nobody, leaving a
+				// ledger-write abort indistinguishable from any other 500. The
+				// body stays generic; internals go to the log, not the client.
+				log.Printf("delegation failed: %v", err)
 				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 				return
 			}
