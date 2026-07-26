@@ -132,7 +132,24 @@ func (e *Engine) RunWithID(ctx context.Context, reqID string, req types.Delegate
 		retries = 0
 	}
 
-	_ = e.store.RecordRequest(ctx, reqID, req, types.StatusRunning)
+	// A failed ledger write aborts the delegation instead of being swallowed.
+	//
+	// This is the one write that must not be best-effort. Without its row: the
+	// delegation still bills real tokens against a model, every later
+	// UpdateRequestResult silently no-ops against a row that does not exist, an
+	// async caller polling GET /requests/{id} gets 404 forever with no way to
+	// tell "never recorded" from "bad id", and the ledger under-reports spend —
+	// which is the single number this project exists to produce. Reporting a
+	// smaller total than was actually spent is worse than refusing the work,
+	// because nobody goes looking for money that was never shown to them.
+	//
+	// Refusing before the provider call is also the cheap direction: it costs a
+	// retry, not tokens. The realistic causes are a locked or unwritable
+	// ledger, and Open's retry plus WAL already absorb the transient ones, so
+	// what reaches here is a real problem worth surfacing.
+	if err := e.store.RecordRequest(ctx, reqID, req, types.StatusRunning); err != nil {
+		return types.DelegateResult{}, fmt.Errorf("record request in ledger: %w", err)
+	}
 
 	var attempts []types.Attempt
 	var lastErr string

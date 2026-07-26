@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -64,7 +65,21 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 						_ = store.UpdateRequestResult(context.Background(), reqID, types.StatusFailed, "", "panic during delegation")
 					}
 				}()
-				_, _ = eng.RunWithID(context.Background(), reqID, req)
+				// An error here means the run never got as far as a
+				// terminal status of its own — most likely the ledger write
+				// that opens RunWithID failed, so there is no row to update.
+				// The caller already holds this ID and will poll it, so record
+				// the failure rather than leaving them on a permanent 404 with
+				// no way to tell "never recorded" from "bad id". Best effort:
+				// if the ledger is what broke, this fails too, and the log line
+				// is then the only surviving trace.
+				if _, err := eng.RunWithID(context.Background(), reqID, req); err != nil {
+					log.Printf("async delegation %s failed before recording a result: %v", reqID, err)
+					if _, found, gerr := store.GetRequest(context.Background(), reqID); gerr == nil && !found {
+						_ = store.RecordRequest(context.Background(), reqID, req, types.StatusFailed)
+					}
+					_ = store.UpdateRequestResult(context.Background(), reqID, types.StatusFailed, "", err.Error())
+				}
 			}()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
