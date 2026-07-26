@@ -27,10 +27,14 @@ func TestHistoryQuery(t *testing.T) {
 }
 
 func TestGatewayURLDefault(t *testing.T) {
+	// Unset now means embedded mode, not a localhost:8181 proxy target, so
+	// GatewayURL() returns "" until a later task makes this call site
+	// mode-aware.
 	t.Setenv("CHAIO_CREWCHIEF_URL", "")
+	t.Setenv("CREWCHIEF_URL", "")
 	t.Setenv("DISPATCH_URL", "")
-	if got := GatewayURL(); got != "http://localhost:8181" {
-		t.Errorf("default = %q", got)
+	if got := GatewayURL(); got != "" {
+		t.Errorf("default = %q, want empty (embedded mode)", got)
 	}
 	t.Setenv("CHAIO_CREWCHIEF_URL", "http://box:9999")
 	if got := GatewayURL(); got != "http://box:9999" {

@@ -143,7 +143,7 @@ func Doctor(w io.Writer, args []string) int {
 		}
 	}
 
-	base := gwurl.URL()
+	base := gwurl.URLFromEnv()
 	var health healthResp
 	if err := fetchJSON(base+"/health", &health); err != nil {
 		fmt.Fprintf(w, "gateway: UNREACHABLE at %s (%v)\n", base, err)

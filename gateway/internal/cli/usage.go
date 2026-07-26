@@ -105,7 +105,7 @@ func thousands(n int64) string {
 
 // Usage fetches /stats and prints the efficiency report. Returns exit code.
 func Usage(w io.Writer, args []string) int {
-	base := gwurl.URL()
+	base := gwurl.URLFromEnv()
 	var s statsResp
 	if err := fetchJSON(base+"/stats", &s); err != nil {
 		fmt.Fprintf(w, "gateway: UNREACHABLE at %s (%v)\n", base, err)

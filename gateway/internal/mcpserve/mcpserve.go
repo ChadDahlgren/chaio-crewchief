@@ -28,7 +28,7 @@ const (
 // GatewayURL resolves the gateway base URL from the environment. The rules
 // live in internal/gwurl so the MCP server and the CLI subcommands can never
 // disagree about where the gateway is.
-func GatewayURL() string { return gwurl.URL() }
+func GatewayURL() string { return gwurl.URLFromEnv() }
 
 type client struct {
 	base string
