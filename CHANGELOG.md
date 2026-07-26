@@ -23,17 +23,34 @@ between minor versions. Breaking changes will always be called out here.
   holding that owner's lock file while checking it, read the dead owner as
   alive, and strand its rows in `running` permanently.
 
+  Rows already left `running` by a *previous* release are not reaped, and will
+  not be: they carry `owner_pid = 0`, which the reap guard skips by design,
+  since a row with no recorded owner cannot be shown to be abandoned. An
+  upgrader with a long history will therefore see permanently stale `running`
+  rows in `/history` — a fixture with 16,700 attempts had 334 of them. That is
+  the guard working, not the reaper failing; only rows recorded by this release
+  onward carry an owner to check.
+
 ### Changed
 
 - `usage` no longer reports a missing counterfactual as `savings: $0.00 (0.0%)`.
-  With no `rates.yaml` there is no frontier price to compare against, so it
-  prints `savings: n/a` with the reason and no percentage at all; the same goes
+  With no frontier reference rate — no `rates.yaml`, or one that declares no
+  `counterfactual:` block — there is no price to compare against, so it prints
+  `savings: n/a` with the reason and no percentage at all; the same goes
   for a ledger with no attempts yet. When a run cost more than the frontier
   would have, it is reported as `overspend` with a ratio rather than as
   negative savings with an unbounded percentage. `GET /stats` gained
   `counterfactual_configured` to carry the distinction over the wire, since a
-  real zero and an absent rates table are otherwise identical. Negative dollar
+  real zero and an unpriced ledger are otherwise identical. Negative dollar
   amounts now print as `-$3.75` rather than `$-3.7500`.
+
+  A gateway older than this release does not send `counterfactual_configured`
+  at all, so `usage` and `fleet-statusline.sh` trust the flag only when
+  `counterfactual_usd` is itself zero. This matters because the CLI and the
+  daemon upgrade separately — `brew upgrade` moves the CLI while a running
+  `serve` stays on the old binary until it is restarted — and without the
+  check a new CLI against an old gateway would print `savings: n/a` directly
+  beneath a real, non-zero counterfactual.
 - **Breaking:** an unset `CHAIO_CREWCHIEF_URL` now selects embedded mode rather
   than defaulting to `http://localhost:8181`. Set the variable explicitly to
   keep proxying to a gateway.

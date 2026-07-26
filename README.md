@@ -16,9 +16,10 @@ tokens would have cost at frontier rates, so "what did the fleet save me"
 is a queryable number (`chaio-crewchief usage`), not a vibe.
 
 Pricing is opt-in: the ledger records every attempt either way, but without a
-`rates.yaml` next to your config there is no frontier price to compare against,
-so `usage` reports `savings: n/a` and names the missing file rather than
-inventing a percentage. `init` does not write one. Note that `cost_usd` is
+`rates.yaml` next to your config — or with one that declares no
+`counterfactual:` block — there is no frontier price to compare against, so
+`usage` reports `savings: n/a` and names what to add rather than inventing a
+percentage. `init` does not write one. Note that `cost_usd` is
 priced per attempt at write time and never recomputed, so a fresh ledger shows
 $0.00 spend while a ledger that accumulated real costs under a rates file keeps
 showing that spend if the file later goes missing — the same `n/a`, above a
