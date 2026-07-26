@@ -106,6 +106,10 @@ func TestMoneySign(t *testing.T) {
 		want string
 	}{
 		{0, "$0.00"},
+		// v < 0 is false for negative zero while v == 0 is true, so the naive
+		// test takes the v == 0 branch and %.2f puts the sign back inside the
+		// currency symbol: "$-0.00".
+		{math.Copysign(0, -1), "-$0.00"},
 		{3.75, "$3.75"},
 		{0.5, "$0.5000"},
 		{-3.75, "-$3.75"},
@@ -141,10 +145,37 @@ func TestSavingsLine(t *testing.T) {
 		present []string
 	}{
 		{
-			name:   "no rates table, ledger has real spend",
+			// The message must not name a file the CLI never looked for: this
+			// same shape is produced by a rates.yaml that exists but has no
+			// `counterfactual:` block.
+			name:   "no frontier reference rate, ledger has real spend",
 			s:      mk(12, 3.75, 0, false, 0),
-			want:   "savings:  n/a — no rates.yaml, so there is no frontier price to compare against\n",
-			absent: []string{"%", "0.0"},
+			want:   "savings:  n/a — no frontier reference rate configured; add a `counterfactual:` block to rates.yaml\n",
+			absent: []string{"%", "0.0", "no rates.yaml"},
+		},
+		{
+			// A pre-0.5 gateway omits counterfactual_configured entirely, so it
+			// decodes to false beside a real, priced counterfactual. Reporting
+			// "no frontier price" there loses the headline number on every
+			// upgrade where the CLI moves ahead of the daemon.
+			name:    "old gateway: flag absent but counterfactual is real",
+			s:       mk(16700, 0, 551.10, false, 1.0),
+			present: []string{"savings:  $551.10", "100.0%"},
+			absent:  []string{"n/a"},
+		},
+		{
+			name:   "negative counterfactual is not described as $0.00",
+			s:      mk(5, 1, -20, true, 0),
+			want:   "savings:  n/a — the frontier counterfactual priced to -$20.00, which is not a price\n",
+			absent: []string{"$0.00", "%"},
+		},
+		{
+			// "overspend: $0.0001 — this ran 1.0x the frontier price" states a
+			// difference the ratio it prints denies.
+			name:    "near parity does not print a 1.0x overspend",
+			s:       mk(4, 10.0001, 10.0, true, 0),
+			absent:  []string{"overspend", "1.0x", "%"},
+			present: []string{"frontier price"},
 		},
 		{
 			name:   "zero attempts",
