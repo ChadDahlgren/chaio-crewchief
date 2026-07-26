@@ -44,8 +44,32 @@ between minor versions. Breaking changes will always be called out here.
   MCP session could silently use different ledgers and different lock
   directories.
 - `~/.chaio-crewchief/` (or `CHAIO_CREWCHIEF_HOME`) is the default location for
-  config and the ledger when paths are not given as flags. `serve`'s flags are
-  unchanged.
+  config and the ledger for the MCP server and the CLI subcommands (`usage`,
+  `doctor`, `init`) when paths are not given as flags. `serve` is unaffected:
+  it ignores `CHAIO_CREWCHIEF_HOME` entirely and its flag defaults remain
+  relative to the working directory.
+- **Breaking:** a delegation now fails when its opening ledger write fails,
+  instead of running anyway against a request the ledger never recorded.
+  Without that row every status update silently no-ops, an async caller polling
+  `GET /requests/{id}` gets 404 forever, and orphan reaping can never see the
+  request. For `serve` this is an HTTP behavior change: `POST /delegate` can
+  now return 500 where it previously returned an artifact — in practice only
+  when the ledger is unwritable or locked past the retry budget. This guards
+  request bookkeeping, not spend: attempt rows, which carry the cost, are still
+  best-effort and now log loudly when they fail rather than aborting work whose
+  tokens are already billed.
+- Schema migrations now run inside a transaction each, taken with
+  `BEGIN IMMEDIATE`, so an interrupted upgrade leaves the database exactly as
+  it was rather than half-migrated with nothing recorded — a state that used to
+  brick the ledger until someone hand-edited `schema_migrations`. Databases
+  already in that state heal themselves on the next open. `Open` also retries a
+  locked database with a short backoff, since embedded mode makes concurrent
+  first-opens normal and the WAL conversion takes a lock `busy_timeout` does
+  not cover.
+- Embedded mode logs a warning on every start when no `rates.yaml` is present,
+  naming the path it looked for. Without a rates table every attempt prices at
+  $0, and `usage` reporting $0.00 spend and 0% savings is otherwise
+  indistinguishable from a fleet that is genuinely free.
 - `serve` now creates a `locks/` directory alongside its `--db` and takes an
   ownership lock inside it, so a process can tell whether the owner of an
   in-flight ledger row is still alive. This is a new writable-directory
