@@ -33,18 +33,26 @@ What to watch for in its report:
 Every attempt is a row: outcome (delivered/failed), tokens, wall, tok/sec,
 provider_class, cost, and content-addressed refs for the full
 prompt/response/artifact (nothing the fleet does is unauditable). Re-run
-`/chaio-crewchief:status` and diff the baseline: that's what the exercise cost
-(local = $0.00).
+`/chaio-crewchief:status` and diff the baseline: that's what the exercise cost.
+A local preset is priced at $0.00 — as is everything else, if you have not
+written a `~/.chaio-crewchief/rates.yaml`, which `init` does not create.
 
 ## 4. Same job, cloud burst (1 min)
+
+Needs a cloud preset in your roster — run `crewchief_models` and use one of
+those names below. (`cf-gpt-oss-120b` is one deployment's Cloudflare Workers AI
+preset, not a name that exists by default.)
+
 > Delegate with crewchief_delegate: task "Write a Python function slugify(s)
 > that lowercases, replaces runs of non-alphanumerics with single hyphens,
-> and strips leading/trailing hyphens", model "cf-gpt-oss-120b".
+> and strips leading/trailing hyphens", model "<your cloud preset>".
 
-Same pipeline, same telemetry — but provider_class `cloud`, a real (tiny)
-cost_usd, and typically faster wall time than the local GPU when it's busy.
-Swapping `model` is the entire difference between $0-local and cloud-burst.
-Read the artifact yourself, same as exercise 2 — Crew Chief still isn't judging.
+Same pipeline, same telemetry — but provider_class `cloud` and typically faster
+wall time than the local GPU when it's busy. Swapping `model` is the entire
+difference between local and cloud-burst. The cost shows up as a real (tiny)
+`cost_usd` only if you priced that preset in `~/.chaio-crewchief/rates.yaml`;
+without a rates file, every attempt reads $0.00 no matter who ran it. Read the
+artifact yourself, same as exercise 2 — Crew Chief still isn't judging.
 
 ## 5. Score a new model (optional, ~10 min)
 > Separate tool, separate repository:
