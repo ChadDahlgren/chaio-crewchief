@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,47 +24,6 @@ func TestHistoryQuery(t *testing.T) {
 		if got := HistoryQuery(c.model, c.outcome, c.limit); got != c.want {
 			t.Errorf("HistoryQuery(%q,%q,%d) = %q, want %q", c.model, c.outcome, c.limit, got, c.want)
 		}
-	}
-}
-
-func TestGatewayURLDefault(t *testing.T) {
-	// Unset now means embedded mode, not a localhost:8181 proxy target, so
-	// GatewayURL() returns "" until a later task makes this call site
-	// mode-aware.
-	t.Setenv("CHAIO_CREWCHIEF_URL", "")
-	t.Setenv("CREWCHIEF_URL", "")
-	t.Setenv("DISPATCH_URL", "")
-	if got := GatewayURL(); got != "" {
-		t.Errorf("default = %q, want empty (embedded mode)", got)
-	}
-	t.Setenv("CHAIO_CREWCHIEF_URL", "http://box:9999")
-	if got := GatewayURL(); got != "http://box:9999" {
-		t.Errorf("env override = %q", got)
-	}
-}
-
-func TestGatewayURLFallsBackToDispatchURL(t *testing.T) {
-	t.Setenv("CHAIO_CREWCHIEF_URL", "")
-	t.Setenv("CREWCHIEF_URL", "")
-	t.Setenv("DISPATCH_URL", "http://legacy:8181")
-	if got := GatewayURL(); got != "http://legacy:8181" {
-		t.Errorf("fallback = %q", got)
-	}
-}
-
-// Configs written under the two earlier project names keep working, but the
-// current name wins when more than one is set.
-func TestGatewayURLPrecedence(t *testing.T) {
-	t.Setenv("CHAIO_CREWCHIEF_URL", "")
-	t.Setenv("CREWCHIEF_URL", "http://prev:2")
-	t.Setenv("DISPATCH_URL", "http://legacy:8181")
-	if got := GatewayURL(); got != "http://prev:2" {
-		t.Errorf("got = %q, want CREWCHIEF_URL to beat DISPATCH_URL", got)
-	}
-
-	t.Setenv("CHAIO_CREWCHIEF_URL", "http://new:1")
-	if got := GatewayURL(); got != "http://new:1" {
-		t.Errorf("got = %q, want CHAIO_CREWCHIEF_URL to win", got)
 	}
 }
 
@@ -93,4 +53,41 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func TestDelegateRejectsAsyncWhenEmbedded(t *testing.T) {
+	err := checkDelegate(Options{Embedded: true, ModelsConfigured: true}, delegateIn{Task: "t", Async: true})
+	if err == nil {
+		t.Fatal("async accepted in embedded mode; the process dies with the session")
+	}
+	for _, want := range []string{"async", "CHAIO_CREWCHIEF_URL"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+func TestDelegateAllowsAsyncWhenGateway(t *testing.T) {
+	if err := checkDelegate(Options{Embedded: false, ModelsConfigured: true}, delegateIn{Task: "t", Async: true}); err != nil {
+		t.Errorf("async rejected in gateway mode: %v", err)
+	}
+}
+
+func TestDelegateRejectsWhenNoModelsConfigured(t *testing.T) {
+	opts := Options{Embedded: true, ModelsConfigured: false, ModelsPath: "/home/u/.chaio-crewchief/models.yaml"}
+	err := checkDelegate(opts, delegateIn{Task: "t"})
+	if err == nil {
+		t.Fatal("delegate accepted with no models configured")
+	}
+	for _, want := range []string{"/home/u/.chaio-crewchief/models.yaml", "init"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+func TestDelegateAllowedWhenConfigured(t *testing.T) {
+	if err := checkDelegate(Options{Embedded: true, ModelsConfigured: true}, delegateIn{Task: "t"}); err != nil {
+		t.Errorf("configured sync delegate rejected: %v", err)
+	}
 }

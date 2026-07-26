@@ -1,8 +1,12 @@
-// Package mcpserve exposes the Crew Chief gateway as a stdio MCP server
-// (`chaio-crewchief mcp`). It is a thin proxy: every tool call maps to one HTTP
-// request against a running gateway (CHAIO_CREWCHIEF_URL, default localhost:8181),
-// so the MCP process can run on a laptop while the gateway runs on the box
-// with the GPUs. No logic lives here.
+// Package mcpserve exposes Crew Chief as a stdio MCP server
+// (`chaio-crewchief mcp`). Every tool call maps to one HTTP request against a
+// gateway. That gateway is either embedded in this process (the default) or a
+// remote one named by CHAIO_CREWCHIEF_URL, so the MCP process can run on a
+// laptop while the fleet runs on the box with the GPUs.
+//
+// The only logic here is refusing what the current mode cannot honestly
+// deliver: async when the gateway dies with the session, and delegation when
+// no models are configured. Everything else is the gateway's.
 package mcpserve
 
 import (
@@ -16,7 +20,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/gwurl"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -25,10 +28,33 @@ const (
 	defaultTimeout  = 15 * time.Second
 )
 
-// GatewayURL resolves the gateway base URL from the environment. The rules
-// live in internal/gwurl so the MCP server and the CLI subcommands can never
-// disagree about where the gateway is.
-func GatewayURL() string { return gwurl.URLFromEnv() }
+// Options tell the MCP server which gateway to talk to and what it may
+// promise. The two modes share these handlers exactly; only these fields
+// differ between them.
+type Options struct {
+	// BaseURL is the gateway to call, embedded or remote.
+	BaseURL string
+	// Embedded reports that the gateway is in this process and dies with it.
+	Embedded bool
+	// ModelsConfigured reports whether a registry was loaded.
+	ModelsConfigured bool
+	// ModelsPath is where a registry should live, named in guidance messages.
+	ModelsPath string
+}
+
+// checkDelegate rejects delegations this mode cannot honestly perform.
+func checkDelegate(opts Options, in delegateIn) error {
+	if !opts.ModelsConfigured {
+		return fmt.Errorf("no models configured: create %s, or run `chaio-crewchief init` to write a starter file, then restart", opts.ModelsPath)
+	}
+	if in.Async && opts.Embedded {
+		// An embedded gateway dies with the Claude Code session, so an
+		// accepted async job would vanish rather than finish. Say so instead
+		// of taking work we cannot complete.
+		return fmt.Errorf("async delegation needs a gateway that outlives this session: run `chaio-crewchief serve` and set CHAIO_CREWCHIEF_URL to it, or drop async to run this synchronously")
+	}
+	return nil
+}
 
 type client struct {
 	base string
@@ -129,14 +155,17 @@ func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
 }
 
-// Run serves the MCP tools over stdio until the client disconnects.
-func Run(ctx context.Context, version string) error {
-	c := &client{base: GatewayURL(), hc: &http.Client{}}
+// RunWith serves the MCP tools over stdio until the client disconnects.
+func RunWith(ctx context.Context, version string, opts Options) error {
+	c := &client{base: opts.BaseURL, hc: &http.Client{}}
 	s := mcp.NewServer(&mcp.Implementation{Name: "chaio-crewchief", Version: version}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "crewchief_delegate",
 		Description: "Relay a work order to a fleet model and return whatever it produced. Crew Chief does not judge the output — that's the caller's job. Status is delivered (a response came back) or failed (every mechanical retry — no response/timeout/error — was exhausted). Set async:true for long jobs and poll crewchief_request."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in delegateIn) (*mcp.CallToolResult, any, error) {
+			if err := checkDelegate(opts, in); err != nil {
+				return nil, nil, err
+			}
 			out, err := c.post(ctx, "/delegate", in, delegateTimeout)
 			if err != nil {
 				return nil, nil, err
@@ -157,6 +186,11 @@ func Run(ctx context.Context, version string) error {
 	mcp.AddTool(s, &mcp.Tool{Name: "crewchief_models",
 		Description: "List the model roster (presets) the gateway can delegate to."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, any, error) {
+			if !opts.ModelsConfigured {
+				return textResult(fmt.Sprintf(
+					"No models configured. Create %s, or run `chaio-crewchief init` to write a starter file, then restart this session.",
+					opts.ModelsPath)), nil, nil
+			}
 			out, err := c.get(ctx, "/models", defaultTimeout)
 			if err != nil {
 				return nil, nil, err
