@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -89,5 +91,30 @@ func TestDelegateRejectsWhenNoModelsConfigured(t *testing.T) {
 func TestDelegateAllowedWhenConfigured(t *testing.T) {
 	if err := checkDelegate(Options{Embedded: true, ModelsConfigured: true}, delegateIn{Task: "t"}); err != nil {
 		t.Errorf("configured sync delegate rejected: %v", err)
+	}
+}
+
+// The guidance must not send someone who has already run `init` back to `init`.
+// Its roster is empty because every preset is commented out, and that is the
+// actionable thing to say.
+func TestNoModelsGuidanceDependsOnWhetherFileExists(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "models.yaml")
+	if got := noModelsGuidance(missing); !strings.Contains(got, "chaio-crewchief init") {
+		t.Errorf("guidance for a missing file = %q, want it to suggest init", got)
+	}
+
+	existing := filepath.Join(t.TempDir(), "models.yaml")
+	if err := os.WriteFile(existing, []byte("models: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := noModelsGuidance(existing)
+	if strings.Contains(got, "chaio-crewchief init") {
+		t.Errorf("guidance for an existing file = %q, want it not to suggest a step already taken", got)
+	}
+	if !strings.Contains(got, "Uncomment") {
+		t.Errorf("guidance for an existing file = %q, want it to say to uncomment a preset", got)
+	}
+	if !strings.Contains(got, existing) {
+		t.Errorf("guidance = %q, want it to name the path", got)
 	}
 }

@@ -13,10 +13,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -42,10 +44,21 @@ type Options struct {
 	ModelsPath string
 }
 
+// noModelsGuidance says what to do next about an empty roster, which depends
+// on whether the file exists. Telling someone who has already run `init` to run
+// `init` sends them back to a step they completed; the roster is empty because
+// every preset in that file is commented out, and that is the thing to say.
+func noModelsGuidance(modelsPath string) string {
+	if _, err := os.Stat(modelsPath); err == nil {
+		return fmt.Sprintf("no models configured: %s exists but its roster is empty. Uncomment one of the presets in it, point it at a real endpoint, then restart", modelsPath)
+	}
+	return fmt.Sprintf("no models configured: create %s, or run `chaio-crewchief init` to write a starter file, then restart", modelsPath)
+}
+
 // checkDelegate rejects delegations this mode cannot honestly perform.
 func checkDelegate(opts Options, in delegateIn) error {
 	if !opts.ModelsConfigured {
-		return fmt.Errorf("no models configured: create %s, or run `chaio-crewchief init` to write a starter file, then restart", opts.ModelsPath)
+		return errors.New(noModelsGuidance(opts.ModelsPath))
 	}
 	if in.Async && opts.Embedded {
 		// An embedded gateway dies with the Claude Code session, so an
@@ -187,9 +200,7 @@ func RunWith(ctx context.Context, version string, opts Options) error {
 		Description: "List the model roster (presets) the gateway can delegate to."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, any, error) {
 			if !opts.ModelsConfigured {
-				return textResult(fmt.Sprintf(
-					"No models configured. Create %s, or run `chaio-crewchief init` to write a starter file, then restart this session.",
-					opts.ModelsPath)), nil, nil
+				return textResult(noModelsGuidance(opts.ModelsPath)), nil, nil
 			}
 			out, err := c.get(ctx, "/models", defaultTimeout)
 			if err != nil {
@@ -212,8 +223,8 @@ func RunWith(ctx context.Context, version string, opts Options) error {
 			// first delegation is where the user finds out it isn't.
 			if !opts.ModelsConfigured {
 				return textResult(fmt.Sprintf(
-					"%s\n\nThe gateway is running, but no models are configured, so delegation will refuse. Create %s, or run `chaio-crewchief init` to write a starter file, then restart this session.",
-					out, opts.ModelsPath)), nil, nil
+					"%s\n\nThe gateway is running, but %s, so delegation will refuse.",
+					out, noModelsGuidance(opts.ModelsPath))), nil, nil
 			}
 			return textResult(out), nil, nil
 		})
