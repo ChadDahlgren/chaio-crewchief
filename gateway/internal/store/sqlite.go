@@ -126,8 +126,32 @@ type SQLite struct {
 	ownerHost string
 }
 
+// dsn builds the driver connection string for a database path.
+//
+// Embedded mode made this ledger multi-writer by design: two Claude Code
+// sessions, or `usage --local` alongside a live MCP session, all open the same
+// file. Under the default rollback journal a writer that loses a collision
+// gets an immediate "database is locked (5)" rather than waiting, which
+// surfaces to the user as a delegation that failed for no visible reason.
+//
+// WAL lets readers proceed during a write, and busy_timeout turns the
+// remaining writer-writer collisions into a short wait instead of an error.
+//
+// modernc.org/sqlite takes pragmas as _pragma query parameters and applies
+// them per connection, ordering busy_timeout first. The path is left outside
+// any file: URI on purpose: without the file: prefix the driver truncates the
+// DSN at '?' and passes the remainder through literally, so relative paths and
+// paths containing spaces need no escaping. (A path containing a literal '?'
+// would break this, and would break the file: form too.)
+//
+// WAL creates -wal and -shm siblings next to the database, so a deployment
+// that whitelists writable paths must grant the directory, not just the file.
+func dsn(path string) string {
+	return path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+}
+
 func Open(path string) (*SQLite, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, err
 	}
@@ -174,14 +198,6 @@ func (s *SQLite) UpdateRequestStatus(ctx context.Context, id string, status type
 // records no owner, and rows without one are never reaped.
 func (s *SQLite) AssumeOwnership(pid int, host string) {
 	s.ownerPID, s.ownerHost = pid, host
-}
-
-// SetRequestOwner records which process is working a request, so a later run
-// can tell an orphan from work still in flight.
-func (s *SQLite) SetRequestOwner(ctx context.Context, id string, pid int, host string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE requests SET owner_pid = ?, owner_host = ? WHERE id = ?`, pid, host, id)
-	return err
 }
 
 // ReapOrphans fails every request left running by a process that no longer

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,24 +296,20 @@ func TestReapOrphansOnlyFailsDeadLocalRows(t *testing.T) {
 	}
 	defer live.Release()
 
-	seed := func(id string, pid int, h string) {
-		if err := st.RecordRequest(ctx, id, types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+	// The real path: a process announces its ownership once, and every row it
+	// records afterwards is stamped at INSERT. Re-announcing between seeds is
+	// how one test stands in for several differently-owned processes.
+	seed := func(id string, pid int, h string, status types.DelegateStatus) {
+		st.AssumeOwnership(pid, h)
+		if err := st.RecordRequest(ctx, id, types.DelegateRequest{Task: "t"}, status); err != nil {
 			t.Fatalf("RecordRequest(%s) error = %v", id, err)
 		}
-		if err := st.SetRequestOwner(ctx, id, pid, h); err != nil {
-			t.Fatalf("SetRequestOwner(%s) error = %v", id, err)
-		}
 	}
-	seed("dead-local", 999999, host)     // no lock file -> orphan
-	seed("live-local", live.PID(), host) // lock held -> must survive
-	seed("other-host", 999998, "some-other-box")
+	seed("dead-local", 999999, host, types.StatusRunning)     // no lock file -> orphan
+	seed("live-local", live.PID(), host, types.StatusRunning) // lock held -> must survive
+	seed("other-host", 999998, "some-other-box", types.StatusRunning)
 	// A finished row must never be touched regardless of owner.
-	if err := st.RecordRequest(ctx, "done", types.DelegateRequest{Task: "t"}, types.StatusDelivered); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetRequestOwner(ctx, "done", 999997, host); err != nil {
-		t.Fatal(err)
-	}
+	seed("done", 999997, host, types.StatusDelivered)
 
 	n, err := st.ReapOrphans(ctx, lockDir, host)
 	if err != nil {
@@ -357,10 +354,8 @@ func TestReapOrphansIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	host := ownership.Host()
 
+	st.AssumeOwnership(999999, host)
 	if err := st.RecordRequest(ctx, "x", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetRequestOwner(ctx, "x", 999999, host); err != nil {
 		t.Fatal(err)
 	}
 	n, err := st.ReapOrphans(ctx, lockDir, host)
@@ -430,5 +425,55 @@ func TestRecordRequestStampsAssumedOwner(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("ReapOrphans() = %d, want 1; RecordRequest did not stamp the owner", n)
+	}
+}
+
+// The DSN pragmas are the difference between a losing writer waiting and a
+// losing writer returning "database is locked (5)" to a user who did nothing
+// wrong. Assert they actually took effect rather than that the string was
+// assembled: the driver applies them per connection, and a syntax it silently
+// ignored would look identical from the outside.
+func TestOpenAppliesWALAndBusyTimeout(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	var mode string
+	if err := st.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if !strings.EqualFold(mode, "wal") {
+		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+
+	var timeout int
+	if err := st.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", timeout)
+	}
+}
+
+// Paths are relative by default (serve's --db is "./chaio-crewchief.db") and
+// this repo lives under a path with a space in it. Appending a query string to
+// a bare path must not disturb either.
+func TestOpenHandlesAwkwardPaths(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a dir with spaces")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "t.db")
+	st, err := Open(db)
+	if err != nil {
+		t.Fatalf("Open(%q) error = %v", db, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := os.Stat(db); err != nil {
+		t.Errorf("database not created at %q: %v", db, err)
 	}
 }
