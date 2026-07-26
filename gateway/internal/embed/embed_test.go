@@ -3,14 +3,18 @@ package embed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/registry"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/types"
 )
 
@@ -73,6 +77,36 @@ func TestStartWithNoConfigHasEmptyRoster(t *testing.T) {
 	}
 }
 
+func TestStartWithNoConfigReportsModelsNotConfigured(t *testing.T) {
+	inst := startIn(t, t.TempDir())
+	if inst.ModelsConfigured {
+		t.Error("ModelsConfigured = true with no models.yaml, want false")
+	}
+}
+
+func TestStartWithValidConfigReportsModelsConfigured(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "models.yaml"), []byte(`
+models:
+  - name: a
+    base_url: http://127.0.0.1:1
+    default: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inst := startIn(t, home)
+	if !inst.ModelsConfigured {
+		t.Error("ModelsConfigured = false with a valid models.yaml, want true")
+	}
+	// Prove the fixture actually loaded, rather than merely proving
+	// ModelsConfigured is hardcoded true: the preset written above must show
+	// up in the served roster.
+	_, body := get(t, inst.BaseURL+"/models")
+	if !strings.Contains(body, "\"name\":\"a\"") {
+		t.Errorf("GET /models = %s, want it to contain the configured preset %q", body, "a")
+	}
+}
+
 func TestStartCreatesHomeAndArchive(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "nested", "home")
 	startIn(t, home)
@@ -97,6 +131,16 @@ func TestStartFailsOnMalformedRegistry(t *testing.T) {
 		inst.Close()
 		t.Fatal("Start() with malformed models.yaml = nil error, want failure")
 	}
+	// Pin the reason, not just that Start failed: a bad path, an unopenable
+	// store, or a listener failure would also make err non-nil, and none of
+	// those proves the invariant under test — that a malformed config is
+	// never mistaken for a missing one.
+	if errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("Start() error = %v, want anything but ErrNotFound for a malformed file", err)
+	}
+	if !errors.Is(err, registry.ErrInvalidYAML) {
+		t.Fatalf("Start() error = %v, want it to wrap registry.ErrInvalidYAML", err)
+	}
 }
 
 func TestCloseReleasesPortAndIsIdempotent(t *testing.T) {
@@ -113,10 +157,48 @@ func TestCloseReleasesPortAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCloseIsSafeForConcurrentCallers(t *testing.T) {
+	inst := startIn(t, t.TempDir())
+
+	const n = 8
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			errs <- inst.Close()
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Close() error = %v, want nil", err)
+		}
+	}
+}
+
 func TestEachStartGetsItsOwnPort(t *testing.T) {
 	a := startIn(t, t.TempDir())
 	b := startIn(t, t.TempDir())
 	if a.BaseURL == b.BaseURL {
 		t.Errorf("both instances bound %s; ports must be kernel-assigned", a.BaseURL)
+	}
+
+	// A hardcoded incrementing counter would also make the URLs differ.
+	// Prove both are real, independently live listeners with non-zero ports.
+	for _, inst := range []*Instance{a, b} {
+		u, err := url.Parse(inst.BaseURL)
+		if err != nil {
+			t.Fatalf("parse %q: %v", inst.BaseURL, err)
+		}
+		if u.Port() == "" || u.Port() == "0" {
+			t.Errorf("BaseURL = %q, want a non-zero kernel-assigned port", inst.BaseURL)
+		}
+		code, _ := get(t, inst.BaseURL+"/health")
+		if code != http.StatusOK {
+			t.Errorf("GET %s/health = %d, want 200", inst.BaseURL, code)
+		}
 	}
 }

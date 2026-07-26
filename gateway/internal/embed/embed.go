@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/archive"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
@@ -54,9 +55,10 @@ type Instance struct {
 	// server is running but delegation will refuse with guidance.
 	ModelsConfigured bool
 
-	srv    *http.Server
-	st     *store.SQLite
-	closed bool
+	srv      *http.Server
+	st       *store.SQLite
+	closeOne sync.Once
+	closeErr error
 }
 
 // emptyRegistry stands in for a missing models.yaml. A fresh install has none,
@@ -75,6 +77,10 @@ func (emptyRegistry) List() []types.Preset            { return nil }
 // that exists but is malformed. A missing config is not an error; a malformed
 // one must never be read as "nothing configured", because that sends the user
 // hunting in the wrong place for a YAML typo.
+//
+// ctx bounds only the startup orphan-reaping pass; it does not control the
+// server's lifetime. Cancelling it after Start returns has no effect on the
+// running server — Close is the only shutdown path.
 func Start(ctx context.Context, cfg Config) (*Instance, error) {
 	p := cfg.Paths
 	if err := os.MkdirAll(p.Home, 0o700); err != nil {
@@ -166,22 +172,26 @@ func loadRegistry(path string) (types.Registry, bool, error) {
 }
 
 // Close shuts the server, releases the ownership lock, and closes the store.
-// It is safe to call more than once.
+// It is safe to call more than once, and safe to call concurrently: a
+// sync.Once guarantees the shutdown sequence runs exactly once even if, say,
+// a defer races a signal handler, and every caller — first or not — gets the
+// same outcome back rather than a bare nil on the second call.
 func (i *Instance) Close() error {
-	if i == nil || i.closed {
+	if i == nil {
 		return nil
 	}
-	i.closed = true
-
-	var firstErr error
-	if err := i.srv.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		firstErr = err
-	}
-	if err := i.Owner.Release(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := i.st.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	return firstErr
+	i.closeOne.Do(func() {
+		var firstErr error
+		if err := i.srv.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			firstErr = err
+		}
+		if err := i.Owner.Release(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := i.st.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		i.closeErr = firstErr
+	})
+	return i.closeErr
 }
