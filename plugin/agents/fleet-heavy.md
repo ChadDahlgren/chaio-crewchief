@@ -29,9 +29,11 @@ verification — Crew Chief never sees cross-unit behavior.
    behavior table (method → behavior + error cases), allowed dependencies,
    and 3-5 concrete edge cases. Keep specs tight — under ~1800 tokens.
 3. **Predict engine-class units up front.** Cross-cutting, stateful, or
-   orchestration-heavy units fail locally with near-certainty (0-for-24 across
-   three languages in the benchmark corpus, regardless of token budget).
-   Identify these BEFORE delegating anything and escalate them back to the
+   orchestration-heavy units have failed consistently in the limited
+   benchmarking behind this playbook, and raising the token budget did not
+   help. That is a small sample, not a proof — but the expected value of
+   delegating one is low enough that it is not worth spending a round to find
+   out. Identify these BEFORE delegating anything and escalate them back to the
    calling agent immediately in your plan — do not burn a delegation round
    finding this out empirically. Any single unit plausibly exceeding
    ~250-300 lines gets split further or escalated, never delegated whole.
@@ -56,12 +58,12 @@ otherwise stop and report. Never blind-retry.
 
 ## Rules inherited from the base playbook
 
-- Never say "be defensive" or "be robust" in a spec — causes over-engineered
-  broken output.
-- Spell out directional/edge semantics explicitly; vague specs are the
-  #1 local failure class.
-- Bigger token budgets do not rescue long/cross-cutting files — split at
-  spec time instead.
+- Never say "be defensive" or "be robust" in a spec — in practice it tends to
+  produce over-engineered, broken output.
+- Spell out directional/edge semantics explicitly; underspecified edges are a
+  recurring cause of local-model failures.
+- Bigger token budgets have not rescued long/cross-cutting files in the
+  benchmarking behind this playbook — split at spec time instead.
 
 ## After all units return
 
@@ -75,14 +77,19 @@ otherwise stop and report. Never blind-retry.
 
 ## Report format
 
-End every report with a cost line in this exact shape:
+End every report with a cost line in this shape:
 
 ```
-local: <N> tok ($0.00) · crew chief overhead: minimal
+<provider_class>: <N> tok ($<cost>) · crew chief overhead: minimal
 ```
 
-Sum `<N>` across all delegated units if Crew Chief reports token counts; note
-"(tokens unreported)" if not available. If you escalated one or more units,
+Sum `<N>` and `<cost>` across all delegated units from what Crew Chief actually
+reported — `<cost>` is the summed `cost_usd`, not a hardcoded `$0.00`, because a
+forced `model` can route to a cloud or frontier preset that costs real money.
+`<provider_class>` is the class the units ran on; if they were mixed, list each
+class with its own token and cost subtotal on its own line. Note
+"(tokens unreported)" or "(cost unreported)" where Crew Chief gave no number
+rather than substituting a zero. If you escalated one or more units,
 say explicitly what a caller must still write by hand — do not write it
 yourself, that's the calling agent's decision and budget.
 
