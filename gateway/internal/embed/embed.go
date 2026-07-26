@@ -145,7 +145,9 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 
 	arch, err := archive.New(p.Archive)
 	if err != nil {
-		owner.Release()
+		if relErr := owner.Release(); relErr != nil {
+			log.Printf("warning: release ownership lock: %v", relErr)
+		}
 		st.Close()
 		return nil, fmt.Errorf("open archive %s: %w", p.Archive, err)
 	}
@@ -157,7 +159,9 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 	// collide and nothing has to be configured.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		owner.Release()
+		if relErr := owner.Release(); relErr != nil {
+			log.Printf("warning: release ownership lock: %v", relErr)
+		}
 		st.Close()
 		return nil, fmt.Errorf("listen on loopback: %w", err)
 	}

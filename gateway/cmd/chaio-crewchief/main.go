@@ -147,7 +147,11 @@ func runMCP() error {
 	if err != nil {
 		return err
 	}
-	defer inst.Close()
+	defer func() {
+		if closeErr := inst.Close(); closeErr != nil {
+			log.Printf("warning: close embedded gateway: %v", closeErr)
+		}
+	}()
 
 	return mcpserve.RunWith(ctx, version, mcpserve.Options{
 		BaseURL:          inst.BaseURL,
@@ -232,7 +236,11 @@ func serve() {
 			"and will stay in that state until cleaned up by hand. Make %s writable to fix.",
 			lockDir, err, lockDir)
 	} else {
-		defer owner.Release()
+		defer func() {
+			if relErr := owner.Release(); relErr != nil {
+				log.Printf("warning: release ownership lock: %v", relErr)
+			}
+		}()
 		st.AssumeOwnership(owner.PID(), ownership.Host())
 	}
 

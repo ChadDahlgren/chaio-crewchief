@@ -187,7 +187,11 @@ func Usage(w io.Writer, args []string) int {
 			fmt.Fprintf(w, "error: start embedded gateway: %v\n", err)
 			return 1
 		}
-		defer inst.Close()
+		defer func() {
+			if closeErr := inst.Close(); closeErr != nil {
+				fmt.Fprintf(w, "warning: close embedded gateway: %v\n", closeErr)
+			}
+		}()
 		base = inst.BaseURL
 	} else {
 		fmt.Fprintf(w, "mode: gateway (%s)\n", base)

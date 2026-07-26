@@ -161,7 +161,7 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// database/sql's BeginTx cannot express BEGIN IMMEDIATE, so drive the
 	// transaction on a pinned connection by hand.
