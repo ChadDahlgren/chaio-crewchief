@@ -13,8 +13,9 @@ names one. So ask the tools, not a URL.
 1. **Preferred — the MCP tools**, which reach whichever gateway this session is
    actually using:
    - `crewchief_health` — per-preset healthy flags
-   - `crewchief_stats` — rows per model×verdict plus totals:
-     `{attempts, prompt_tokens, output_tokens, cost_usd, counterfactual_usd, savings_pct}`
+   - `crewchief_stats` — rows per model×outcome plus totals:
+     `{attempts, prompt_tokens, output_tokens, cost_usd, counterfactual_usd,
+     savings_pct, counterfactual_configured}`
    - `crewchief_models` — the configured roster
 2. **If the MCP tools aren't available** (the plugin isn't loaded, or you're
    outside a session that has it), shell out to the CLI instead:
@@ -27,6 +28,13 @@ names one. So ask the tools, not a URL.
    - One line per unhealthy preset (skip healthy ones unless all are healthy —
      then say so in one line).
    - Ledger: attempts, total tokens, real spend, counterfactual, savings %.
+     Only report a savings % when there is one to report: a false
+     `counterfactual_configured` beside a zero `counterfactual_usd` means no
+     frontier reference rate is configured, so say `savings: n/a` and why —
+     `0.0%` there is a claim, not a reading. Same at zero attempts. A gateway
+     predating this plugin omits the field, so a missing
+     `counterfactual_configured` beside a non-zero `counterfactual_usd` is a
+     real counterfactual, not an absent one.
    - Note the provider mix if interesting (local vs cloud vs frontier). Stats
      rows are per model×outcome and carry no `provider_class` — that field is
      on attempt rows, so get the mix from `crewchief_history` if you want it.

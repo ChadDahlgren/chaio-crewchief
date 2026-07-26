@@ -230,7 +230,7 @@ func RunWith(ctx context.Context, version string, opts Options) error {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "crewchief_stats",
-		Description: "Aggregate delegation telemetry: tokens, verdicts, real cost vs frontier counterfactual."},
+		Description: "Aggregate delegation telemetry: tokens, outcomes, real cost vs frontier counterfactual."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, any, error) {
 			out, err := c.get(ctx, "/stats", defaultTimeout)
 			if err != nil {

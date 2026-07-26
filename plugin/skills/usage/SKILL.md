@@ -19,6 +19,16 @@ shared — and render the same shape by hand: a per-model table (attempts,
 delivered, failed, cost) followed by totals (tokens, spend, frontier
 counterfactual, savings $ and %).
 
+When rendering by hand, do not compute a savings figure unless the totals
+support one. `counterfactual_configured: false` alongside a zero
+`counterfactual_usd` means there is no frontier reference rate to compare
+against — write `savings: n/a` and say why, never `$0.00 (0.0%)`, which claims
+a break-even that was never measured. Same for `attempts: 0`. If the cost
+exceeds the counterfactual that is an overspend, not negative savings; give the
+ratio rather than an unbounded negative percentage. A gateway older than this
+plugin omits `counterfactual_configured` entirely, so treat a missing field
+beside a non-zero `counterfactual_usd` as a real counterfactual.
+
 Note this is a `PATH` problem, not a missing install: the MCP server *is* the
 binary (the plugin launches `chaio-crewchief mcp`), so if the `crewchief_*`
 tools are available at all, the binary exists somewhere. It just isn't on the
