@@ -2361,6 +2361,50 @@ artifact. The attempt and result writes stay best-effort — their tokens are
 already spent by the time they run — but log loudly rather than being
 discarded.
 
+**Task 4 — the async goroutine must record the failure it just caught.** The
+plan's `serve` handler has a bare `_, _ = eng.RunWithID(...)` in the async
+goroutine. Apply this together with the engine-abort correction directly above,
+or that correction defeats itself: once `RunWithID` aborts on a failed
+`RecordRequest`, the async path has already handed the caller an ID for a
+request with no row, and swallowing the error leaves them polling a permanent
+404 — the exact failure the abort was added to prevent. The shipped code logs
+the error, calls `RecordRequest` with `StatusFailed` if `GetRequest` finds no
+row, then `UpdateRequestResult`. Both writes are best effort: if the ledger is
+what broke, they fail too and the log line is the only surviving trace.
+
+**Task 4 — `recordResult` is a helper, and the best-effort writes are loud.**
+The plan writes the terminal status with a bare `_ = e.store.UpdateRequestResult(...)`
+at each of its two call sites. The shipped code routes both through an
+`(*Engine).recordResult` helper that logs `LEDGER STALE` on failure, and
+`RecordAttempt`'s discarded error got the same treatment. Neither aborts — the
+tokens are spent and the caller is being handed the artifact either way — but a
+silently dropped ledger write is a number the user will later read as fact.
+
+**Task 9 — `usage` prints a mode header.** New behavior in neither the plan nor
+this list. Before rendering, `usage` prints `mode: embedded (home %s)` or
+`mode: gateway (%s)`, as `doctor` does. Two ledgers produce visually identical
+reports, and the likeliest upgrade surprise is someone who relied on the old
+implicit `localhost:8181` default now reading an empty local ledger and
+concluding their data is gone.
+
+**Task 9 — `doctor`'s mode header wording.** The plan prints
+`mode: embedded (no CHAIO_CREWCHIEF_URL set; home %s)`; the shipped code prints
+`mode: embedded (home %s)`.
+
+**Task 9 — `usage` does not report a missing counterfactual as 0% savings.**
+The plan renders `savings: %s (%.1f%%)` unconditionally over
+`money(counterfactual - cost)`. Nothing in the binary writes a `rates.yaml`, so
+"no rates table" is every embedded home's starting state, and any ledger with
+priced history renders as `savings: $-3.7500 (0.0%)` — a negative figure
+labelled savings beside a percentage claiming break-even. The shipped code adds
+`counterfactual_configured` to `StatsTotalsView` (an absent rates table and a
+genuine zero are otherwise identical over the wire, especially at zero
+attempts), prints `savings: n/a` with the reason and *no* percentage when there
+is nothing to compare against or no attempts yet, reports `cost > counterfactual`
+as `overspend` with a ratio rather than an unbounded negative percentage, and
+formats money's magnitude with the sign outside the currency symbol (`-$3.75`,
+not `$-3.7500`). Non-finite totals render `n/a` rather than `$NaN`.
+
 Smaller corrections: `usage`/`doctor` reject flags placed after a positional
 argument rather than silently discarding them; `init` rejects trailing
 arguments rather than reporting success; `-h` exits 0.
