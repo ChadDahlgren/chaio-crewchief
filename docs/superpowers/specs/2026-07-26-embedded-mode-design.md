@@ -1,7 +1,7 @@
 # Embedded mode design
 
 Date: 2026-07-26
-Status: approved, not yet implemented
+Status: approved; corrected 2026-07-26 against the code while writing the plan
 
 ## Problem
 
@@ -139,9 +139,11 @@ failed to start".
   dereferencing a nil model.
 
 A **malformed** `models.yaml` must still fail loudly. Silently treating a YAML
-typo as "no models configured" would be worse than failing. This requires
-`LoadRegistry` to distinguish absent from malformed; if it does not currently do
-so, that is part of this work.
+typo as "no models configured" would be worse than failing.
+
+This requires `LoadRegistry` to distinguish absent from malformed. It currently
+does not — it wraps every `os.ReadFile` failure as one opaque `failed to read
+file` error — so adding that distinction is part of this work.
 
 ### `chaio-crewchief init`
 
@@ -171,29 +173,53 @@ Supporting embedded async remains possible later; nothing here forecloses it.
 
 ## Startup reaping
 
-Any attempt row left in a non-terminal state by a process that no longer exists
-is marked `failed`, with a reason recording that its owner is gone. This runs in
-`store.Open`, before anything else touches the database, and therefore applies
-to **both** modes — a `serve` killed with SIGKILL strands rows the same way.
+Any request left in a non-terminal state by a process that no longer exists is
+marked `failed`, with a reason recording that its owner is gone. This runs
+immediately after the store is opened, before anything else touches the
+database, and applies to **both** modes — a `serve` killed with SIGKILL strands
+rows the same way.
 
-### Ownership columns
+It targets the **`requests`** table. The `attempts` table has no status column —
+it records a `verdict` after an attempt completes — while `StatusRunning`, the
+only non-terminal state, lives on `requests`.
+
+### Ownership
 
 Reaping must not fail a row owned by a live sibling. Two Claude Code sessions
 running embedded mode share one SQLite file, and a naive reap would mark the
-first session's in-flight attempt as failed.
+first session's in-flight request as failed.
 
-Three columns on the attempt row: `owner_pid`, `owner_host`, `owner_started_at`.
+Two columns on the request row, `owner_pid` and `owner_host`, plus a lock file
+per running process at `$HOME/locks/<pid>.lock` held under `flock`.
 
 A row is reaped only when:
 
 1. `owner_host` matches this host — rows written by another machine are never
-   touched. This matters because the GX10 ledger is written by a `serve` on that
-   box, and nothing on a laptop should declare its rows dead.
-2. `owner_pid` is dead, **or** alive but with a process start time that
-   disagrees with `owner_started_at` (PID reuse).
+   touched. The GX10 ledger is written by a `serve` on that box, and nothing on
+   a laptop should declare its rows dead.
+2. `owner_pid` is non-zero — a zero means the row predates ownership and says
+   nothing.
+3. The owner's lock can be acquired, meaning nobody holds it.
 
 Anything ambiguous is left alone. A stale row is a smaller harm than a wrongly
 failed one.
+
+**Why a lock file rather than comparing process start times.** A stored PID
+alone cannot settle liveness, because PIDs are reused: a dead owner's number can
+belong to an unrelated live process, and the orphan would then never be cleaned
+up. Comparing the process start time against a recorded one fixes that, but
+obtaining a start time portably means reading `/proc/<pid>/stat` on Linux and a
+`KERN_PROC` sysctl on macOS — per-OS code or a new dependency, to answer a
+question the kernel already answers. An `flock` is released when its holder
+dies, however it dies. If the lock can be taken, the owner is gone.
+`syscall.Flock` covers every target platform; there is no Windows target.
+
+### Writing the owner
+
+The store is told its owner once, when it is opened, and stamps every request it
+records. The engine records requests knowing nothing about processes, so without
+this every row would carry `owner_pid = 0`, be skipped by guard 2 above, and
+reaping would silently never fire.
 
 ## Error handling
 
@@ -217,8 +243,11 @@ what lands in the MCP logs.
   the two regression tests that matter most.
 - Mode selection: table test over environment variable × flag, including the
   legacy `CREWCHIEF_URL` and `DISPATCH_URL` names.
-- Reaping: seed rows for (dead PID, this host), (live PID, this host), and (any
-  PID, other host); assert only the first is failed.
+- Reaping: seed rows for (dead PID, this host), (live PID, this host), (any PID,
+  other host), and a row with no recorded owner; assert only the first is
+  failed, and that a second reap is a no-op. Separately, assert that a recorded
+  request carries its owner automatically — without that, reaping never fires in
+  production no matter how correct the rest of it is.
 - `init`: writes when absent, refuses when present, `--force` overwrites, and
   the emitted file is valid input to `LoadRegistry`.
 - CI smoke: a second MCP handshake with `CHAIO_CREWCHIEF_URL` unset and an empty
