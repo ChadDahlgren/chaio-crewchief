@@ -24,9 +24,35 @@ between minor versions. Breaking changes will always be called out here.
 - **Breaking:** an unset `CHAIO_CREWCHIEF_URL` now selects embedded mode rather
   than defaulting to `http://localhost:8181`. Set the variable explicitly to
   keep proxying to a gateway.
+- **Breaking:** `crewchief_delegate` now refuses `async: true` in embedded
+  mode, which is the default mode, and returns an error naming the fix. An
+  async job returns a request ID and finishes in the background; the embedded
+  gateway dies with the MCP session, so the job would vanish rather than
+  finish and `crewchief_request` would poll a request nobody is running.
+  Before this release an unset `CHAIO_CREWCHIEF_URL` proxied to
+  `http://localhost:8181`, where async worked — so a caller that relied on it
+  will now get an error where it previously got a request ID. Set
+  `CHAIO_CREWCHIEF_URL` to a `serve` gateway to keep async, or drop `async` to
+  run the delegation synchronously. `POST /delegate` with `async: true` against
+  a `serve` gateway is unchanged.
+- **Breaking:** `CHAIO_CREWCHIEF_HOME` must now be an absolute path; a relative
+  value is rejected at startup instead of being resolved against the process's
+  working directory. This includes a literal unexpanded `~`, which is what a
+  quoted value in an MCP server config JSON produces — it used to create a
+  directory named `~` and report success. Claude Code launches the MCP server
+  with an arbitrary working directory, so a relative home meant the CLI and the
+  MCP session could silently use different ledgers and different lock
+  directories.
 - `~/.chaio-crewchief/` (or `CHAIO_CREWCHIEF_HOME`) is the default location for
   config and the ledger when paths are not given as flags. `serve`'s flags are
   unchanged.
+- `serve` now creates a `locks/` directory alongside its `--db` and takes an
+  ownership lock inside it, so a process can tell whether the owner of an
+  in-flight ledger row is still alive. This is a new writable-directory
+  requirement for existing deployments: `serve` must be able to create a
+  subdirectory next to `--db`. It does not fail to start if it cannot — it logs
+  a warning and disables orphan reaping, which leaves requests abandoned by an
+  exited process stuck in `running` until cleaned up by hand.
 - `fleet-statusline.sh` no longer falls back to `http://localhost:8181` when
   `CHAIO_CREWCHIEF_URL` is unset; it now passes the inner statusline through
   untouched. Embedded mode has no fixed address to curl — the gateway runs
@@ -41,8 +67,11 @@ between minor versions. Breaking changes will always be called out here.
   `-wal` and `-shm`, appear next to it from then on — the containing
   directory needs to be writable, which the rollback journal already
   required, so this adds no new permission requirement. WAL needs shared
-  memory and does not work on NFS; a ledger on a network filesystem must stay
-  on the old journal mode (`PRAGMA journal_mode=DELETE` reverts it).
+  memory and does not work on NFS, and there is no way to opt out: the journal
+  mode is part of the connection string and is reapplied on every connection,
+  so `PRAGMA journal_mode=DELETE` is undone by the next open. **A ledger on a
+  network filesystem has to move to local disk** — point `CHAIO_CREWCHIEF_HOME`
+  (or `serve --db`) somewhere local.
 
 ### Security
 
