@@ -322,7 +322,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `ownership.Acquire(lockDir string) (*Owner, error)`; `(*Owner).PID() int`; `(*Owner).Release() error`; `ownership.OwnerAlive(lockDir string, pid int) (bool, error)`; `ownership.Host() string`.
+- Produces: `ownership.Acquire(lockDir string) (*Owner, error)`; `(*Owner).PID() int`; `(*Owner).Release() error`; `ownership.OwnerAlive(lockDir string, pid int) (bool, error)`; `ownership.EnsureDir(lockDir string) error`; `ownership.Host() string`.
 
 Why a lock file rather than checking the PID: PIDs get reused, so a dead owner's number can belong to an unrelated live process, and reaping would then skip a genuinely orphaned row forever. Comparing process start times would settle it, but that is `/proc/<pid>/stat` on Linux and a `KERN_PROC` sysctl on macOS — per-OS code or a new dependency, for a question `flock` answers exactly. A live process holds its lock; when it dies for any reason, including SIGKILL, the kernel releases it. If we can take the lock, the owner is gone.
 
@@ -1193,6 +1193,24 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 		return nil, fmt.Errorf("open store %s: %w", p.DB, err)
 	}
 
+	// Reap BEFORE acquiring, and create the lock directory first. Lock files
+	// outlive their processes and pids get reused — realistically after a
+	// reboot, which reallocates low ones — so acquiring first can leave this
+	// process holding the lock file of a dead owner whose pid it drew. That
+	// owner's abandoned rows then read as live and stay `running` forever,
+	// unfixable by any later run. And OwnerAlive stats the lock directory and
+	// returns "assume alive" when it is missing, so without EnsureDir nothing
+	// is ever reaped.
+	if err := ownership.EnsureDir(p.Locks); err != nil {
+		st.Close()
+		return nil, fmt.Errorf("prepare lock directory: %w", err)
+	}
+	if n, err := st.ReapOrphans(ctx, p.Locks, ownership.Host()); err != nil {
+		log.Printf("warning: reaping orphaned requests failed: %v", err)
+	} else if n > 0 {
+		log.Printf("failed %d orphaned request(s) left by exited processes", n)
+	}
+
 	owner, err := ownership.Acquire(p.Locks)
 	if err != nil {
 		st.Close()
@@ -1201,14 +1219,6 @@ func Start(ctx context.Context, cfg Config) (*Instance, error) {
 	// Every request this instance records is stamped with this owner, so a
 	// later run can tell work we abandoned from work still in flight.
 	st.AssumeOwnership(owner.PID(), ownership.Host())
-
-	// Before anything else touches the ledger: fail rows left running by
-	// processes that are gone, so a stale status is never reported as live.
-	if n, err := st.ReapOrphans(ctx, p.Locks, ownership.Host()); err != nil {
-		log.Printf("warning: reaping orphaned requests failed: %v", err)
-	} else if n > 0 {
-		log.Printf("failed %d orphaned request(s) left by exited processes", n)
-	}
 
 	arch, err := archive.New(p.Archive)
 	if err != nil {
@@ -2288,6 +2298,22 @@ and now removes the file *while still holding the lock*. `OwnerAlive` also
 stats the lock directory first and returns "alive" when it is missing, so a
 misconfigured path cannot mass-fail every running row.
 
+**Task 5 — the plan reaped *after* acquiring, and never created the lock
+directory.** `embed.Start` in the plan text called `ownership.Acquire(p.Locks)`
+and only then `st.ReapOrphans(...)`. Lock files outlive their processes and pids
+get reused — realistically after a reboot, which reallocates low ones — so
+acquiring first can leave this process holding the lock file of a dead owner
+whose pid it drew. That owner's abandoned rows then read as live and stay
+`running` permanently, unfixable by any later run: exactly the class of defect
+the `OwnerAlive` correction above describes. The shipped code reaps first.
+
+It also calls a `ownership.EnsureDir(lockDir)` the plan's interface list does
+not mention. `OwnerAlive` stats the lock directory and returns "assume alive"
+when it is missing, so on a fresh home — where nothing has created the directory
+yet — every pid reads as live and nothing is ever reaped. Both the plan's code
+block and its Task 3 `ownership` API list have been corrected above; a re-runner
+following the earlier text verbatim reintroduces both.
+
 **Task 4 — the plan's tests assumed a lock directory that nothing creates.**
 Following from the above, `TestReapOrphansIsIdempotent` and
 `TestRecordRequestStampsAssumedOwner` must `os.MkdirAll` the lock directory
@@ -2404,6 +2430,28 @@ is nothing to compare against or no attempts yet, reports `cost > counterfactual
 as `overspend` with a ratio rather than an unbounded negative percentage, and
 formats money's magnitude with the sign outside the currency symbol (`-$3.75`,
 not `$-3.7500`). Non-finite totals render `n/a` rather than `$NaN`.
+
+Two later corrections to that field. First, it is computed from
+`rates.Table.HasCounterfactual()`, not from `rt != nil` as the first cut had it:
+a `rates.yaml` that exists but declares no `counterfactual:` block loads a
+non-nil table whose counterfactual prices everything at $0, so `rt != nil`
+reported a configured frontier that does not exist. The flag therefore means
+"there is a frontier reference rate", not "a rates file is loaded".
+
+Second, `savingsLine` checks the *amount* before the flag: it only trusts
+`counterfactual_configured == false` when `counterfactual_usd` is also zero. A
+pre-0.5 gateway omits the field entirely, so it decodes to false beside a real,
+priced counterfactual, and a flag-first order printed "no frontier price to
+compare against" directly under a $551.10 counterfactual — on precisely the
+upgrade shape where the CLI moves ahead of a still-running daemon. The n/a text
+also no longer names `rates.yaml` as missing, since the CLI never checked for
+it; it names the `counterfactual:` block instead. `plugin/scripts/
+fleet-statusline.sh` needs the same jq ordering, and there it is the *only* case
+that occurs, since the statusline runs only in gateway mode. Two further fixes
+
+in the same function: a negative counterfactual is reported as its actual value
+rather than as "$0.00", and a cost within rounding distance of the frontier
+prints parity rather than an "overspend ... 1.0x" that contradicts itself.
 
 Smaller corrections: `usage`/`doctor` reject flags placed after a positional
 argument rather than silently discarding them; `init` rejects trailing
