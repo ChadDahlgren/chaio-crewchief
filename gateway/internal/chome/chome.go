@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // EnvHome overrides the default location entirely.
@@ -51,7 +52,13 @@ type Paths struct {
 func Dir() (string, error) {
 	if v := os.Getenv(EnvHome); v != "" {
 		if !filepath.IsAbs(v) {
-			return "", fmt.Errorf("%s must be an absolute path, got %q (shell ~ is not expanded inside a quoted value; write the full path)", EnvHome, v)
+			// The tilde hint only where it applies: a bare relative path is a
+			// different mistake and pointing at shell expansion would misdirect.
+			hint := ""
+			if strings.HasPrefix(v, "~") {
+				hint = " (a quoted ~ is never expanded — no shell runs; write the full path)"
+			}
+			return "", fmt.Errorf("%s must be an absolute path, got %q%s", EnvHome, v, hint)
 		}
 		return v, nil
 	}
