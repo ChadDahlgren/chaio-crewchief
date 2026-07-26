@@ -1,5 +1,5 @@
 # GoReleaser builds, checksums, and publishes chaio-crewchief, and writes the
-# Homebrew formula into ChadDahlgren/homebrew-tap so `brew install` works
+# Homebrew cask into ChadDahlgren/homebrew-tap so `brew install` works
 # without anyone compiling Go.
 #
 # Run locally without publishing anything:

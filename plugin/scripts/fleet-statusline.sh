@@ -5,7 +5,7 @@
 #
 # Opt in (plugins can't ship statuslines) — in ~/.claude/settings.json:
 #   "statusLine": { "type": "command",
-#     "command": "bash ~/.claude/plugins/<...>/fleet/scripts/fleet-statusline.sh" }
+#     "command": "bash ~/.claude/plugins/<...>/chaio-crewchief/scripts/fleet-statusline.sh" }
 # Set FLEET_INNER_STATUSLINE to your previous script to keep its output.
 #
 # Requires CHAIO_CREWCHIEF_URL. Without it, this script appends nothing and

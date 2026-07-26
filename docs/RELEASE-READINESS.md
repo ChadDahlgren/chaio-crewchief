@@ -5,7 +5,7 @@ to a properly managed public project. Written 2026-07-25.
 
 **Naming, as settled in Phase 0:** the brand is **Chaio**, the product is
 **Crew Chief**, and everything shipped is `chaio-crewchief` — repo, module,
-binary, Homebrew formula, Claude Code plugin. MCP *tool* names stay
+binary, Homebrew cask, Claude Code plugin. MCP *tool* names stay
 `crewchief_*`, because some MCP clients don't namespace tools by server and
 bare `delegate`/`stats` would collide. The `chaio-` prefix is a deliberate
 brand play: it disambiguates from two existing CrewChiefs and gives future
@@ -23,7 +23,7 @@ through a pull request with green CI. No direct pushes, no auto-merge.
 
 ## Phase 0 — Decide the identity (do first; blocks the rename cost)
 
-Everything downstream — the repo URL, the Homebrew formula, the binary name,
+Everything downstream — the repo URL, the Homebrew cask, the binary name,
 the MCP server name — bakes in the project name. Changing it after publishing
 is expensive and confusing. This project has already been renamed twice
 (Dispatch → Foreman → Crew Chief); make this the last time.
@@ -210,7 +210,7 @@ governance layer around it.
 cross-compiles four platforms and publishes checksums — it has simply never
 run, because no tag has ever been pushed. GoReleaser replaces the hand-rolled
 build loop and adds the piece that actually matters: it generates and pushes
-the Homebrew formula for you.
+the Homebrew cask for you.
 
 **Why Homebrew over npm:** npm distribution of a Go binary means publishing
 several platform-specific packages wired together with `optionalDependencies`
