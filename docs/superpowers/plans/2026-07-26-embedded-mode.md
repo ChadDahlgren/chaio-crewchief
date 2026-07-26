@@ -2317,6 +2317,50 @@ declare each other dead: the one looking in the wrong directory finds no lock
 file for the other's PID, concludes it exited, and reaps its genuinely
 in-flight rows. One function makes them agree by construction.
 
+**Task 1 — `chome.Dir` must reject a relative `CHAIO_CREWCHIEF_HOME`.** The
+plan resolves the variable as given. Claude Code launches the MCP server with
+an arbitrary working directory, so a relative value has the CLI and the MCP
+session silently using different ledgers and different lock directories. The
+shipped code requires an absolute path, which also catches a literal
+unexpanded `~` — what a quoted value in an MCP server config JSON produces,
+and which used to create a directory named `~` and report success.
+
+**Task 2 — the DSN carries pragmas the plan omits.** `store.dsn` appends
+`?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)`. Embedded mode makes
+the ledger multi-writer by design, and under the default rollback journal a
+writer that loses a collision gets an immediate "database is locked" rather
+than waiting. Note this is a persistent, one-way change to any existing
+database file and does not work on NFS.
+
+**Task 2 — `Open` retries, and migrations are transactional.** The plan opens
+once and reads `MAX(version)` outside a transaction. Both are wrong under the
+concurrency embedded mode introduces: unsynchronized version reads have two
+processes running the same `ALTER`, and the `journal_mode(WAL)` conversion
+takes an exclusive lock `busy_timeout` does not cover. Each migration now runs
+in its own `BEGIN IMMEDIATE` transaction that commits the DDL and the version
+row together, and `Open` retries the whole sequence on a locked database with a
+linear backoff spanning ~6.5s — longer than the 5s `busy_timeout`, since the
+uncovered pre-WAL case is the one that needs the patience.
+
+**Task 2 — anything indexing a migrated column must be created after the
+migrations run.** The plan puts `idx_requests_owner_status` (over
+`owner_host`, added by migration 4) in `schemaDDL`, which `openOnce` executes
+*before* `applyMigrations`. On any database that already exists,
+`CREATE TABLE IF NOT EXISTS` no-ops and the table keeps its old columns, so the
+index statement hits a column that is not there yet and `Open` fails — on every
+pre-existing ledger, deterministically, unrecoverable without hand-running
+`sqlite3`. The shipped code moves it to a `postMigrationDDL` constant executed
+after `applyMigrations` returns. A re-runner following the plan verbatim would
+reintroduce a bug that breaks every existing install.
+
+**Task 4 — the engine aborts when `RecordRequest` fails.** The plan swallows
+it. Without the parent row, `UpdateRequestResult` no-ops, async pollers get 404
+forever, and reaping never sees the request. This is a `POST /delegate`
+behavior change for `serve`: it can now 500 where it previously returned an
+artifact. The attempt and result writes stay best-effort — their tokens are
+already spent by the time they run — but log loudly rather than being
+discarded.
+
 Smaller corrections: `usage`/`doctor` reject flags placed after a positional
 argument rather than silently discarding them; `init` rejects trailing
 arguments rather than reporting success; `-h` exits 0.
