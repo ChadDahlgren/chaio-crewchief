@@ -47,52 +47,77 @@ CREATE TABLE IF NOT EXISTS attempts (
   response_ref TEXT,
   artifact_ref TEXT
 );
+
+-- ReapOrphans filters on exactly this pair on every embedded start, which is
+-- now once per Claude Code session rather than once per daemon start. The
+-- ledger is append-only and grows forever, so the scan it replaces gets slower
+-- for the life of the install.
+CREATE INDEX IF NOT EXISTS idx_requests_owner_status ON requests (owner_host, status);
 `
 
 // migration is one forward schema step, applied in order and recorded in
 // schema_migrations by version so RegisterMigration-style plugin packages
 // (per ARCHITECTURE.md) have a place to append future entries.
+//
+// up runs inside the same transaction that records the version, so a migration
+// is all-or-nothing: an interrupted run leaves the database exactly as it was,
+// never half-migrated with nothing recorded.
 type migration struct {
 	version int
-	up      func(db *sql.DB) error
+	up      func(ctx context.Context, tx execer) error
+}
+
+// execer is the write half of a pinned connection running an open transaction.
+// It exists because database/sql's BeginTx cannot express BEGIN IMMEDIATE, so
+// the transaction is driven by hand on a *sql.Conn rather than a *sql.Tx.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// addColumn applies one ADD COLUMN, tolerating a column that is already there.
+//
+// SQLite has no ADD COLUMN IF NOT EXISTS, and every one of these migrations can
+// legitimately meet a database that already has the column: either because
+// schemaDDL grew it later, or — before migrations were transactional — because
+// an earlier run applied the ALTER and died before recording the version. That
+// second case used to be unrecoverable, since applyMigrations floors the
+// version at 1 and would re-run the ALTER forever. Tolerating the duplicate is
+// what heals those databases on the next open.
+func addColumn(ctx context.Context, tx execer, what, stmt string) error {
+	if _, err := tx.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return nil
 }
 
 var migrations = []migration{
 	{
 		version: 2, // Phase 1 token/cost ledger
-		up: func(db *sql.DB) error {
-			if _, err := db.Exec(`ALTER TABLE attempts ADD COLUMN provider_class TEXT NOT NULL DEFAULT 'local'`); err != nil {
-				return fmt.Errorf("add provider_class: %w", err)
+		up: func(ctx context.Context, tx execer) error {
+			if err := addColumn(ctx, tx, "add provider_class", `ALTER TABLE attempts ADD COLUMN provider_class TEXT NOT NULL DEFAULT 'local'`); err != nil {
+				return err
 			}
-			if _, err := db.Exec(`ALTER TABLE attempts ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0`); err != nil {
-				return fmt.Errorf("add cost_usd: %w", err)
-			}
-			return nil
+			return addColumn(ctx, tx, "add cost_usd", `ALTER TABLE attempts ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0`)
 		},
 	},
 	{
 		version: 3, // async result columns (fresh DBs: attempts table DDL predates the ledger, so ALTERs may partially no-op)
-		up: func(db *sql.DB) error {
-			// ignore "duplicate column" from DBs created after these columns
-			// joined schemaDDL; sqlite has no ADD COLUMN IF NOT EXISTS.
-			if _, err := db.Exec(`ALTER TABLE requests ADD COLUMN artifact TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-				return fmt.Errorf("add artifact: %w", err)
+		up: func(ctx context.Context, tx execer) error {
+			if err := addColumn(ctx, tx, "add artifact", `ALTER TABLE requests ADD COLUMN artifact TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
 			}
-			if _, err := db.Exec(`ALTER TABLE requests ADD COLUMN escalation TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-				return fmt.Errorf("add escalation: %w", err)
-			}
-			return nil
+			return addColumn(ctx, tx, "add escalation", `ALTER TABLE requests ADD COLUMN escalation TEXT NOT NULL DEFAULT ''`)
 		},
 	},
 	{
 		version: 4, // request ownership, for orphan reaping
-		up: func(db *sql.DB) error {
+		up: func(ctx context.Context, tx execer) error {
 			for _, stmt := range []string{
 				`ALTER TABLE requests ADD COLUMN owner_pid INTEGER NOT NULL DEFAULT 0`,
 				`ALTER TABLE requests ADD COLUMN owner_host TEXT NOT NULL DEFAULT ''`,
 			} {
-				if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-					return fmt.Errorf("add owner columns: %w", err)
+				if err := addColumn(ctx, tx, "add owner columns", stmt); err != nil {
+					return err
 				}
 			}
 			return nil
@@ -100,23 +125,61 @@ var migrations = []migration{
 	},
 }
 
-func applyMigrations(db *sql.DB) error {
-	var current int
-	if err := db.QueryRow("SELECT COALESCE(MAX(version), 1) FROM schema_migrations").Scan(&current); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
-	}
+// applyMigrations brings the database up to the highest known version.
+//
+// Each migration gets its own write transaction, opened with BEGIN IMMEDIATE so
+// the write lock is taken before the version is read rather than upgraded
+// afterwards. Two processes opening the same ledger at once therefore serialize
+// here: the loser waits out its busy_timeout and then re-reads the version
+// inside its own transaction, finds the work already recorded, and skips it.
+// Reading MAX(version) outside a transaction, as this used to, let both
+// processes decide to run the same ALTER.
+func applyMigrations(ctx context.Context, db *sql.DB) error {
 	for _, m := range migrations {
-		if m.version <= current {
-			continue
-		}
-		if err := m.up(db); err != nil {
+		if err := applyMigration(ctx, db, m); err != nil {
 			return fmt.Errorf("migration %d: %w", m.version, err)
 		}
-		if _, err := db.Exec("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)", m.version, time.Now().UTC().Format(time.RFC3339)); err != nil {
-			return fmt.Errorf("record migration %d: %w", m.version, err)
-		}
-		current = m.version
 	}
+	return nil
+}
+
+func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// database/sql's BeginTx cannot express BEGIN IMMEDIATE, so drive the
+	// transaction on a pinned connection by hand.
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	var current int
+	if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 1) FROM schema_migrations").Scan(&current); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if m.version <= current {
+		return nil
+	}
+
+	if err := m.up(ctx, conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)", m.version, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("record migration %d: %w", m.version, err)
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -134,8 +197,15 @@ type SQLite struct {
 // gets an immediate "database is locked (5)" rather than waiting, which
 // surfaces to the user as a delegation that failed for no visible reason.
 //
-// WAL lets readers proceed during a write, and busy_timeout turns the
+// WAL lets readers proceed during a write, and busy_timeout turns most
 // remaining writer-writer collisions into a short wait instead of an error.
+//
+// "Most", not all: switching a database into WAL takes an exclusive lock that
+// the busy handler does not cover, so busy_timeout does not protect the very
+// first open of a new file, nor the first open of a legacy rollback-journal
+// ledger. Concurrent first opens genuinely can fail with "database is locked",
+// which is why Open retries rather than trusting the pragma. Once the database
+// is in WAL, busy_timeout covers every writer collision as described.
 //
 // modernc.org/sqlite takes pragmas as _pragma query parameters and applies
 // them per connection, ordering busy_timeout first. The path is left outside
@@ -150,23 +220,78 @@ func dsn(path string) string {
 	return path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 }
 
+// openAttempts bounds the retry described on Open. Ten tries with the backoff
+// below spans a little over a second, comfortably longer than the WAL
+// conversion it is waiting on, and still far short of a hang a user would
+// notice as the MCP server failing to come up.
+const openAttempts = 10
+
+// isLocked reports whether err is SQLite's transient busy/locked condition,
+// the only class of failure Open retries. Anything else — a bad path, a corrupt
+// file, a genuine schema conflict — is returned immediately, because retrying
+// it just delays the same error.
+func isLocked(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "database is locked") || strings.Contains(s, "table is locked")
+}
+
+// Open opens (creating if needed) the ledger at path and brings its schema up
+// to date.
+//
+// The create-and-migrate window is the one place this is not simply safe to do
+// concurrently, and embedded mode made concurrency the normal case: a fresh
+// install where `usage --local` and an MCP session start together, or two
+// Claude Code sessions launching at once. Two things can collide there — the
+// journal_mode(WAL) conversion, which takes an exclusive lock the busy handler
+// does not cover (see dsn), and the migrations, which now serialize on their
+// own BEGIN IMMEDIATE. Both failures are transient and clear as soon as the
+// other process finishes, so Open retries the whole sequence with a short
+// backoff instead of surfacing "database is locked" to the user as a server
+// that would not start.
+//
+// Steady state is untouched: an already-migrated WAL database succeeds on the
+// first attempt and never sleeps.
 func Open(path string) (*SQLite, error) {
+	var err error
+	for i := 0; i < openAttempts; i++ {
+		var s *SQLite
+		s, err = openOnce(path)
+		if err == nil {
+			return s, nil
+		}
+		if !isLocked(err) {
+			return nil, err
+		}
+		// Linear backoff, jittered by nothing: the contending process holds the
+		// exclusive lock for microseconds, so spacing retries out is enough and
+		// two losers colliding again merely costs another 20ms.
+		time.Sleep(time.Duration(i+1) * 20 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("open database after %d attempts: %w", openAttempts, err)
+}
+
+func openOnce(path string) (*SQLite, error) {
+	ctx := context.Background()
+
 	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := db.Exec(schemaDDL); err != nil {
+	if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to execute schema DDL: %w", err)
 	}
 
-	if _, err := db.Exec("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)", time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if _, err := db.ExecContext(ctx, "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)", time.Now().UTC().Format(time.RFC3339)); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to record schema migration: %w", err)
 	}
 
-	if err := applyMigrations(db); err != nil {
+	if err := applyMigrations(ctx, db); err != nil {
 		db.Close()
 		return nil, err
 	}
