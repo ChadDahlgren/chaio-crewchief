@@ -22,6 +22,33 @@ fleet box on a trusted LAN or a Tailscale network is the design's main use
 case. Putting it on a public interface is not. There is nothing between an
 open port and your provider bill.
 
+### Embedded mode has the same three properties
+
+`chaio-crewchief mcp` runs the gateway in-process by default. That is a real
+HTTP server, so all three properties above apply to it unchanged: **no
+authentication, provider API keys in the process environment, and therefore
+anyone who reaches the port can spend your money.**
+
+Two things narrow it, and neither eliminates it:
+
+- It binds `127.0.0.1` on a **kernel-assigned ephemeral port**, so it is not
+  reachable from another machine and the port number is not predictable.
+- It lives and dies with the MCP session rather than running indefinitely.
+
+Neither is a security boundary. **Any process running as any user on that
+machine can enumerate loopback ports and delegate work** for as long as the
+session is up — spending against your provider accounts, and reading the
+prompts and responses in the ledger it opens. Loopback is not an access
+control; it only means the attacker has to already be on the box.
+
+**This is the case where a shared or multi-user machine matters.** On a
+single-user laptop, an attacker who can run code as you can read the API keys
+out of the environment anyway, and the listener adds nothing. On a build agent,
+a shared workstation, or anything with other people's processes on it, the
+listener is a genuine grant of your spending ability to every local account
+that goes looking. Use a dedicated `serve` on a host you control, or don't
+delegate from a machine you share.
+
 Other properties worth knowing:
 
 - **Prompts and responses are archived in full**, content-addressed on local
@@ -72,9 +99,10 @@ Claude Code plugin.
 
 **Out of scope**, though still worth telling me about:
 
-- The absence of authentication. It's documented above, it's the known design,
-  and `--addr` exposure is the operator's decision. A *bypass* of the loopback
-  default would be in scope.
+- The absence of authentication, in either mode. It's documented above, it's
+  the known design, and `--addr` exposure is the operator's decision. A
+  *bypass* of the loopback default would be in scope, as would the embedded
+  listener binding anything other than `127.0.0.1` or outliving its session.
 - Vulnerabilities in models or providers Crew Chief talks to.
 - Anything requiring an attacker who already has shell access on the gateway
   box — at that point the API keys are readable directly.

@@ -10,6 +10,31 @@ between minor versions. Breaking changes will always be called out here.
 
 ## [Unreleased]
 
+### Added
+
+- Embedded mode: `chaio-crewchief mcp` now runs the gateway in-process, so the
+  plugin works after `brew install` with nothing else running.
+- `chaio-crewchief init` writes a starter `models.yaml` to `~/.chaio-crewchief`.
+- `--local` and `--gateway` on `usage` and `doctor` to pick a ledger explicitly.
+- Requests left running by a process that exited are failed on startup instead
+  of reporting a stale status forever.
+
+### Changed
+
+- **Breaking:** an unset `CHAIO_CREWCHIEF_URL` now selects embedded mode rather
+  than defaulting to `http://localhost:8181`. Set the variable explicitly to
+  keep proxying to a gateway.
+- `~/.chaio-crewchief/` (or `CHAIO_CREWCHIEF_HOME`) is the default location for
+  config and the ledger when paths are not given as flags. `serve`'s flags are
+  unchanged.
+
+### Security
+
+- Embedded mode binds an unauthenticated ephemeral port on `127.0.0.1` for the
+  life of the MCP session. Any local process can reach it while it is up. The
+  threat model is in [SECURITY.md](SECURITY.md); it matters most on shared or
+  multi-user machines.
+
 ## [0.4.0] — 2026-07-26
 
 First public release. Earlier versions existed only in a private deployment

@@ -153,16 +153,48 @@ jobs:
             [ "$status" = "delivered" ] && break; sleep 0.5
           done
           curl -sf "localhost:8181/requests/$id" | jq -e '.status=="delivered" and (.artifact | length > 0)'
+      # --gateway is explicit because an unset CHAIO_CREWCHIEF_URL now selects
+      # the embedded ledger. Without it these steps would pass while quietly
+      # reading an empty local ledger instead of the gateway they just drove.
       - name: doctor + usage subcommands
+        env:
+          CHAIO_CREWCHIEF_URL: http://localhost:8181
         run: |
-          /tmp/chaio-crewchief doctor
-          /tmp/chaio-crewchief usage | tee /dev/stderr | grep -q "CREW CHIEF USAGE"
+          /tmp/chaio-crewchief doctor --gateway
+          /tmp/chaio-crewchief usage --gateway | tee /dev/stderr | grep -q "CREW CHIEF USAGE"
       - name: MCP stdio handshake
         run: |
           { printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n'
             sleep 1
             printf '{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
             sleep 2; } | /tmp/chaio-crewchief mcp | grep -q crewchief_delegate
+
+      # The scenario a fresh installer actually hits: no gateway running, no
+      # config written, no environment variable set. This is what shipped
+      # broken in v0.4.0, so it is what CI guards. Nothing in this job exports a
+      # gateway URL; the unset is there so a repository- or organization-level
+      # env cannot silently turn this back into a proxy test.
+      - name: Embedded MCP starts with no gateway and no config
+        env:
+          CHAIO_CREWCHIEF_HOME: /tmp/embedded-home
+        run: |
+          unset CHAIO_CREWCHIEF_URL CREWCHIEF_URL DISPATCH_URL
+          out=$({ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n'
+            sleep 1
+            printf '{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
+            sleep 2; } | /tmp/chaio-crewchief mcp)
+          echo "$out" | grep -q crewchief_delegate
+          test -d /tmp/embedded-home
+          test ! -f /tmp/embedded-home/models.yaml   # startup must never write config
+
+      - name: init writes a starter config and refuses to clobber it
+        env:
+          CHAIO_CREWCHIEF_HOME: /tmp/embedded-home
+        run: |
+          /tmp/chaio-crewchief init
+          test -f /tmp/embedded-home/models.yaml
+          if /tmp/chaio-crewchief init; then echo "init overwrote without --force"; exit 1; fi
+          /tmp/chaio-crewchief init --force
 
   release-config:
     name: Validate release config (goreleaser + install.sh)
