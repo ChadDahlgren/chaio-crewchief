@@ -40,6 +40,95 @@ func TestStarterConfigIsValidRegistryInput(t *testing.T) {
 	}
 }
 
+// The emitted starter file is `models: []` plus comments, so parsing it proves
+// nothing about the example a user actually uncomments. Parse the example
+// itself, and check the fields survive the round trip: yaml.Unmarshal ignores
+// unknown keys, so a key that does not match types.Preset's yaml tag loads
+// clean and leaves the field empty.
+func TestExampleConfigIsValidRegistryInput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.yaml")
+	if err := os.WriteFile(path, []byte(exampleModelsYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := registry.LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("LoadRegistry(example) error = %v; the commented example must parse", err)
+	}
+	presets := reg.List()
+	if len(presets) == 0 {
+		t.Fatal("example yielded no presets")
+	}
+	for _, p := range presets {
+		if p.Name == "" {
+			t.Error("example preset has an empty Name")
+		}
+		if p.BaseURL == "" {
+			t.Errorf("preset %q has an empty BaseURL; check the base_url key against types.Preset", p.Name)
+		}
+		if p.ModelID == "" {
+			t.Errorf("preset %q has an empty ModelID; check the model_id key against types.Preset", p.Name)
+		}
+		if p.SystemPrompt == "" {
+			t.Errorf("preset %q has an empty SystemPrompt; check the system_prompt key", p.Name)
+		}
+		if p.TimeoutSec == 0 {
+			t.Errorf("preset %q has a zero TimeoutSec; check the timeout_sec key", p.Name)
+		}
+		if p.ProviderClass == "" {
+			t.Errorf("preset %q has an empty ProviderClass; check the provider_class key", p.Name)
+		}
+	}
+	if p, ok := reg.Get("cloud"); !ok {
+		t.Error(`example has no preset named "cloud"`)
+	} else if p.APIKeyEnv == "" {
+		t.Error("cloud preset has an empty APIKeyEnv; check the api_key_env key")
+	}
+	if _, ok := reg.Default(); !ok {
+		t.Error("example declares no default preset; check the default key")
+	}
+}
+
+// The starter file must embed exactly the example the test above validated,
+// or the two drift and the validation stops meaning anything.
+func TestStarterEmbedsTheValidatedExample(t *testing.T) {
+	if !strings.Contains(StarterModelsYAML, commentOut(exampleModelsYAML)) {
+		t.Error("StarterModelsYAML does not contain the commented-out exampleModelsYAML verbatim")
+	}
+	// Uncommenting by hand is what a user does; it must give the example back.
+	var got []string
+	for _, line := range strings.Split(commentOut(exampleModelsYAML), "\n") {
+		switch {
+		case line == "#":
+			got = append(got, "")
+		case strings.HasPrefix(line, "# "):
+			got = append(got, strings.TrimPrefix(line, "# "))
+		default:
+			got = append(got, line)
+		}
+	}
+	if strings.Join(got, "\n") != exampleModelsYAML {
+		t.Error("un-commenting the embedded block does not reproduce exampleModelsYAML")
+	}
+}
+
+func TestInitRejectsPositionalArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CHAIO_CREWCHIEF_HOME", home)
+
+	var out bytes.Buffer
+	if code := Init(&out, []string{"somewhere.yaml"}); code != 2 {
+		t.Errorf("Init(somewhere.yaml) = %d, want 2", code)
+	}
+	if _, err := os.Stat(filepath.Join(home, "models.yaml")); err == nil {
+		t.Error("Init wrote models.yaml despite rejecting the arguments")
+	}
+	if !strings.Contains(out.String(), filepath.Join(home, "models.yaml")) {
+		t.Errorf("usage %q does not name the real target path", out.String())
+	}
+}
+
 func TestInitRefusesToOverwrite(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CHAIO_CREWCHIEF_HOME", home)
