@@ -149,7 +149,7 @@ type delegateIn struct {
 	// retries. Use the HTTP API directly with retries:0 if single-shot with
 	// no retry matters for a specific call.
 	Retries int  `json:"retries,omitempty" jsonschema:"mechanical-failure retries (no response/timeout/error only); omit for default (2)"`
-	Async   bool `json:"async,omitempty" jsonschema:"return a request_id immediately; poll crewchief_request"`
+	Async   bool `json:"async,omitempty" jsonschema:"gateway mode only (CHAIO_CREWCHIEF_URL pointing at a running chaio-crewchief serve): return a request_id immediately and poll crewchief_request. Rejected in the default embedded mode, which cannot outlive this session"`
 }
 
 type requestIn struct {
@@ -174,7 +174,7 @@ func RunWith(ctx context.Context, version string, opts Options) error {
 	s := mcp.NewServer(&mcp.Implementation{Name: "chaio-crewchief", Version: version}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "crewchief_delegate",
-		Description: "Relay a work order to a fleet model and return whatever it produced. Crew Chief does not judge the output — that's the caller's job. Status is delivered (a response came back) or failed (every mechanical retry — no response/timeout/error — was exhausted). Set async:true for long jobs and poll crewchief_request."},
+		Description: "Relay a work order to a fleet model and return whatever it produced. Crew Chief does not judge the output — that's the caller's job. Status is delivered (a response came back) or failed (every mechanical retry — no response/timeout/error — was exhausted). In gateway mode only — CHAIO_CREWCHIEF_URL set to a running `chaio-crewchief serve` — set async:true for long jobs and poll crewchief_request; the default embedded mode rejects async because it dies with this session."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in delegateIn) (*mcp.CallToolResult, any, error) {
 			if err := checkDelegate(opts, in); err != nil {
 				return nil, nil, err
@@ -187,7 +187,7 @@ func RunWith(ctx context.Context, version string, opts Options) error {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "crewchief_request",
-		Description: "Poll the status/result of an async delegation by request_id."},
+		Description: "Poll the status/result of an async delegation by request_id. Only reachable in gateway mode (CHAIO_CREWCHIEF_URL pointing at a running `chaio-crewchief serve`), since the default embedded mode refuses async and so never issues an id to poll."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in requestIn) (*mcp.CallToolResult, any, error) {
 			out, err := c.get(ctx, "/requests/"+url.PathEscape(in.RequestID), defaultTimeout)
 			if err != nil {
