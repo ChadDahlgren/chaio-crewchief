@@ -79,11 +79,21 @@ func (o *Owner) PID() int { return o.pid }
 // unlock and our remove; the remove would then delete the new owner's lock
 // file out from under it, and every later OwnerAlive check for that pid
 // would find nothing and wrongly report it gone, permanently.
+// beforeUnlock runs inside Release, after the file is removed and while the
+// lock is still held. It exists so a test can assert that ordering, which is a
+// correctness invariant with no other observable signature: reversing Release
+// to unlock, close, remove leaves every package's tests green while
+// reintroducing the pid-reuse window described above. Production leaves it nil.
+var beforeUnlock func()
+
 func (o *Owner) Release() error {
 	if o == nil || o.f == nil {
 		return nil
 	}
 	rmErr := os.Remove(o.path)
+	if beforeUnlock != nil {
+		beforeUnlock()
+	}
 	_ = syscall.Flock(int(o.f.Fd()), syscall.LOCK_UN)
 	err := o.f.Close()
 	o.f = nil

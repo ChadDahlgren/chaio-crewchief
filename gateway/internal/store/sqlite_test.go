@@ -385,10 +385,23 @@ func TestReapOrphansSkipsRowsWithNoRecordedOwner(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
+	// Host must match, or the row is skipped by the host guard and the pid
+	// guard is never reached. Pid 0 is what a pre-ownership row carries.
+	st.AssumeOwnership(0, ownership.Host())
 	if err := st.RecordRequest(ctx, "legacy", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
 		t.Fatal(err)
 	}
-	n, err := st.ReapOrphans(ctx, filepath.Join(dir, "locks"), ownership.Host())
+
+	// The lock directory must exist. OwnerAlive treats a missing lockDir as
+	// ambiguous and answers "alive" for every row, so a test that skips this
+	// never reaches the owner_pid > 0 guard it claims to be checking — deleting
+	// that guard used to leave this test green.
+	lockDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.ReapOrphans(ctx, lockDir, ownership.Host())
 	if err != nil {
 		t.Fatalf("ReapOrphans() error = %v", err)
 	}

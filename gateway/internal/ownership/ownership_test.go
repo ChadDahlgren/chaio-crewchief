@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -176,4 +177,72 @@ func TestReleaseRemovesLockFile(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("lock file still present after Release: stat err = %v", err)
 	}
+}
+
+// Release must remove the lock file while the lock is still held.
+//
+// The eight lines of comment on Release explain why: removing after unlocking
+// opens a window where a process that reused this pid could acquire the lock on
+// the same inode between our unlock and our remove. Our remove would then
+// delete the new owner's lock file out from under it, and every later
+// OwnerAlive check for that pid would find nothing and wrongly report it gone —
+// permanently.
+//
+// That invariant had no test. Reordering Release to unlock, close, remove left
+// ownership, store, and embed all passing. This observes the ordering directly:
+// at the instant before the unlock, the file must already be gone.
+func TestReleaseRemovesLockFileWhileStillHeld(t *testing.T) {
+	dir := t.TempDir()
+	o, err := Acquire(dir)
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	var ran bool
+	var existedAtUnlock bool
+	var lockedAtUnlock bool
+	beforeUnlock = func() {
+		ran = true
+		_, statErr := os.Stat(o.path)
+		existedAtUnlock = statErr == nil
+
+		// And the lock genuinely still ours: a second descriptor on the same
+		// path must fail to flock. (Open by path would fail after the remove,
+		// so re-check through the held descriptor's own file instead.)
+		lockedAtUnlock = flockConflicts(t, o.path)
+	}
+	t.Cleanup(func() { beforeUnlock = nil })
+
+	if err := o.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if !ran {
+		t.Fatal("Release() never reached the unlock step")
+	}
+	if existedAtUnlock {
+		t.Error("lock file still present at unlock time: Release removed it after unlocking, reopening the pid-reuse window")
+	}
+	if !lockedAtUnlock {
+		t.Error("lock was already released before the file was removed")
+	}
+	if _, err := os.Stat(o.path); !os.IsNotExist(err) {
+		t.Errorf("lock file still present after Release: stat err = %v", err)
+	}
+}
+
+// flockConflicts reports whether path is absent or held. After a correct
+// Release's remove, path is absent, which is itself proof the remove came
+// first; if it is present, we test whether it is still locked.
+func flockConflicts(t *testing.T, path string) bool {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		return true // gone: removed while held, which is the point
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return true
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
 }
