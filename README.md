@@ -15,6 +15,13 @@ Every attempt lands in a **cost ledger** priced against what the same
 tokens would have cost at frontier rates, so "what did the fleet save me"
 is a queryable number (`chaio-crewchief usage`), not a vibe.
 
+Pricing is opt-in: the ledger records every attempt either way, but until a
+`rates.yaml` sits next to your config, every attempt prices at $0.00 against a
+$0.00 counterfactual and `usage` reports `savings: $0.00 (0.0%)`. `init` does
+not write one. Copy [`gateway/rates.yaml`](gateway/rates.yaml) to
+`~/.chaio-crewchief/rates.yaml` and edit it to your presets and current
+provider prices — step 3 below.
+
 ## Why not have Crew Chief verify the work too?
 
 We built that first — hidden tests, retry-with-feedback, a `solved`
@@ -76,8 +83,28 @@ Workers AI endpoint, anything OpenAI-compatible — and name the environment
 variable holding the token in `api_key_env`. Keys live in the environment,
 never in the file. Working recipes are in [`examples/`](examples/).
 
+Then, if you want the cost ledger to report anything but zero, add a rates
+file — `init` does not write one, and a missing one prices every attempt at
+$0.00 against a $0.00 counterfactual:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ChadDahlgren/chaio-crewchief/main/gateway/rates.yaml \
+  -o ~/.chaio-crewchief/rates.yaml
+$EDITOR ~/.chaio-crewchief/rates.yaml
+```
+
+The keys under `models:` are preset names from your `models.yaml`, priced in
+$/1M tokens; a preset missing from the file is priced at $0, which is what you
+want for a local GPU and not what you want for a cloud endpoint. The
+`counterfactual:` block is the frontier rate `usage` compares against. Edit
+both to your own presets and to current provider prices — the shipped file is
+one deployment's roster, not a live price list.
+
 `CHAIO_CREWCHIEF_HOME` overrides `~/.chaio-crewchief` if you want the config
-and ledger somewhere else.
+and ledger somewhere else. It must be an **absolute path** — a relative value,
+or a literal `~` that no shell expanded (what a quoted value in an MCP config
+JSON produces), is rejected rather than resolved against whatever working
+directory the process happened to start in.
 
 **4. Restart the session and delegate.**
 
