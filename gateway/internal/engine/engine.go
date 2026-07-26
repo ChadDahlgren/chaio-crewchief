@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
@@ -132,21 +133,21 @@ func (e *Engine) RunWithID(ctx context.Context, reqID string, req types.Delegate
 		retries = 0
 	}
 
-	// A failed ledger write aborts the delegation instead of being swallowed.
+	// A failed parent-row write aborts the delegation. The guarantee this buys
+	// is referential, not financial — be precise about which, because the
+	// difference decides what the later writes below do.
 	//
-	// This is the one write that must not be best-effort. Without its row: the
-	// delegation still bills real tokens against a model, every later
-	// UpdateRequestResult silently no-ops against a row that does not exist, an
-	// async caller polling GET /requests/{id} gets 404 forever with no way to
-	// tell "never recorded" from "bad id", and the ledger under-reports spend —
-	// which is the single number this project exists to produce. Reporting a
-	// smaller total than was actually spent is worse than refusing the work,
-	// because nobody goes looking for money that was never shown to them.
+	// Without this row the request does not exist as far as the rest of the
+	// system is concerned: every UpdateRequestResult silently no-ops against a
+	// missing id, an async caller polling GET /requests/{id} gets 404 forever
+	// with no way to tell "never recorded" from "bad id", and ReapOrphans can
+	// never see the request to reap it. Aborting here is also the cheap
+	// direction — it costs a retry, not tokens, because no provider has been
+	// called yet.
 	//
-	// Refusing before the provider call is also the cheap direction: it costs a
-	// retry, not tokens. The realistic causes are a locked or unwritable
-	// ledger, and Open's retry plus WAL already absorb the transient ones, so
-	// what reaches here is a real problem worth surfacing.
+	// What it does NOT buy is spend integrity. Cost lives in attempts, not
+	// here, and the attempt writes below are best-effort by design (see them).
+	// A run that gets past this line can still under-report what it spent.
 	if err := e.store.RecordRequest(ctx, reqID, req, types.StatusRunning); err != nil {
 		return types.DelegateResult{}, fmt.Errorf("record request in ledger: %w", err)
 	}
@@ -157,10 +158,22 @@ func (e *Engine) RunWithID(ctx context.Context, reqID string, req types.Delegate
 	for i := 0; i <= retries; i++ {
 		a, artifact, delivered, callErr := e.attempt(ctx, reqID, preset, req)
 		attempts = append(attempts, a)
-		_ = e.store.RecordAttempt(ctx, a)
+		// This is the row that carries money: usage sums cost_usd over
+		// attempts. Losing it means the ledger under-counts spend, which is
+		// the number this project exists to produce — so it is logged loudly.
+		//
+		// It is still not worth aborting on. By the time control reaches here
+		// the provider call has already happened and the tokens are already
+		// billed, so failing the delegation would throw away work the user has
+		// paid for and recover nothing. The loud log is the mitigation: the
+		// total is wrong, and the operator gets told so.
+		if err := e.store.RecordAttempt(ctx, a); err != nil {
+			log.Printf("LEDGER UNDER-COUNTING SPEND: request %s attempt %s (model %s, $%.4f) was billed but not recorded: %v",
+				reqID, a.ID, a.Model, a.CostUSD, err)
+		}
 
 		if delivered {
-			_ = e.store.UpdateRequestResult(ctx, reqID, types.StatusDelivered, artifact, "")
+			e.recordResult(ctx, reqID, types.StatusDelivered, artifact, "")
 			return types.DelegateResult{RequestID: reqID, Status: types.StatusDelivered, Artifact: artifact, Attempts: attempts}, nil
 		}
 		if callErr != "" {
@@ -168,8 +181,19 @@ func (e *Engine) RunWithID(ctx context.Context, reqID string, req types.Delegate
 		}
 	}
 
-	_ = e.store.UpdateRequestResult(ctx, reqID, types.StatusFailed, "", lastErr)
+	e.recordResult(ctx, reqID, types.StatusFailed, "", lastErr)
 	return types.DelegateResult{RequestID: reqID, Status: types.StatusFailed, Attempts: attempts, Error: lastErr}, nil
+}
+
+// recordResult writes the terminal status, logging rather than failing if the
+// ledger refuses it. Same reasoning as RecordAttempt: the work is done and the
+// caller is being handed the artifact either way, so the only thing left to do
+// about a failed write is make sure it is not silent. A request stuck at
+// "running" here is visible to ReapOrphans, unlike a missing attempt row.
+func (e *Engine) recordResult(ctx context.Context, reqID string, status types.DelegateStatus, artifact, errMsg string) {
+	if err := e.store.UpdateRequestResult(ctx, reqID, status, artifact, errMsg); err != nil {
+		log.Printf("LEDGER STALE: request %s finished %s but the ledger still shows it running: %v", reqID, status, err)
+	}
 }
 
 // attempt makes one model call. delivered is true iff a non-empty response
