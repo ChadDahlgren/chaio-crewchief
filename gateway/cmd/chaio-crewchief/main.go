@@ -208,8 +208,12 @@ func serve() {
 	// died at boot over a reaping feature would be a far worse outcome than one
 	// that serves without it. Without ownership we are exactly at the
 	// pre-ownership behavior: rows carry owner_pid = 0, which no reap will ever
-	// touch. Reaping rows left by *earlier* processes still runs either way —
-	// it only reads lock files.
+	// touch. Reaping rows left by *earlier* processes still runs when the lock
+	// directory exists but is unwritable, since that path only reads lock
+	// files — but not when the directory cannot be created at all: OwnerAlive
+	// stats it first and answers "assume alive" for every pid, so the reaper
+	// runs and finds nothing. That is why the EnsureDir failure below warns
+	// rather than passing silently.
 	//
 	// embed.Start deliberately does not do this — there, a lock it cannot take
 	// is a genuine startup failure.
