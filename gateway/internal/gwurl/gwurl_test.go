@@ -48,6 +48,25 @@ func TestResolve(t *testing.T) {
 			wantMode: ModeEmbedded,
 			wantURL:  "",
 		},
+		{
+			name: "legacy CREWCHIEF_URL wins over legacy DISPATCH_URL",
+			env: map[string]string{
+				"CREWCHIEF_URL": "http://prev:8181",
+				"DISPATCH_URL":  "http://older:8181",
+			},
+			wantMode: ModeGateway,
+			wantURL:  "http://prev:8181",
+		},
+		{
+			name: "current variable wins over both legacy names when all three are set",
+			env: map[string]string{
+				"CHAIO_CREWCHIEF_URL": "http://new:8181",
+				"CREWCHIEF_URL":       "http://prev:8181",
+				"DISPATCH_URL":        "http://older:8181",
+			},
+			wantMode: ModeGateway,
+			wantURL:  "http://new:8181",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
