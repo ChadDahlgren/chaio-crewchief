@@ -28,12 +28,22 @@ job every time: read the artifact, and ideally run it.
 
 ## Model choice (the `model` or `lang` param on crewchief_delegate)
 
+Preset names are whatever the operator put in their own `models.yaml` — there
+is no fixed set, and the starter file `init` writes has none enabled. **Call
+`crewchief_models` to see the roster before naming one**; a preset that isn't
+there won't resolve.
+
 - omit both — resolves via `routing.yaml` if `lang` matches an entry, else
   the registry default
-- name an exact preset (e.g. `cf-gpt-oss-120b`) to force a specific model —
-  useful when the local GPU is busy, or as a second opinion after a
-  different model's answer looked wrong
-- `sonnet-5-ref` — frontier via the same pipe, for comparison
+- name an exact preset from the roster to force a specific model — useful when
+  the local GPU is busy, or as a second opinion after a different model's
+  answer looked wrong
+- if the roster has a frontier preset, naming it sends the same task down the
+  same pipe for comparison — and bills it at frontier rates, so say so
+
+(One deployment's roster reads `local-coder`, `cf-gpt-oss-120b`,
+`bedrock-gpt-oss-120b`, `sonnet-5-ref`. Those are examples of the shape, not
+names you can assume exist.)
 
 ## Discipline (non-negotiable)
 

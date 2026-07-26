@@ -13,10 +13,18 @@ matters which you mean; the two hold different work. `--local` starts a real
 embedded instance to answer, so it opens a loopback listener and takes the
 ownership lock for the length of the command.
 
-If the binary isn't installed, call the `crewchief_stats` MCP tool instead — it
-reaches whichever gateway this session is using, embedded or shared — and render
-the same shape by hand: a per-model table (attempts, delivered, failed, cost)
-followed by totals (tokens, spend, frontier counterfactual, savings $ and %).
+If the shell can't find `chaio-crewchief`, fall back to the `crewchief_stats`
+MCP tool — it reaches whichever gateway this session is using, embedded or
+shared — and render the same shape by hand: a per-model table (attempts,
+delivered, failed, cost) followed by totals (tokens, spend, frontier
+counterfactual, savings $ and %).
+
+Note this is a `PATH` problem, not a missing install: the MCP server *is* the
+binary (the plugin launches `chaio-crewchief mcp`), so if the `crewchief_*`
+tools are available at all, the binary exists somewhere. It just isn't on the
+`PATH` the Bash tool inherits — a Homebrew prefix or `~/go/bin` missing from
+the interactive shell's profile is the usual cause. Worth mentioning to the
+user, since every other CLI command has the same problem.
 
 Note: "delivered" means a response came back, not that it was correct — Crew
 Chief doesn't grade output.

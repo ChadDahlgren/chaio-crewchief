@@ -27,12 +27,21 @@ names one. So ask the tools, not a URL.
    - One line per unhealthy preset (skip healthy ones unless all are healthy —
      then say so in one line).
    - Ledger: attempts, total tokens, real spend, counterfactual, savings %.
-   - Note the provider mix if interesting (local vs cloud vs frontier
-     `provider_class` in stats rows).
-4. If `crewchief_health` reports the gateway is up but no models are configured,
-   the fix is `chaio-crewchief init` and a session restart — say that rather
-   than reporting a fleet outage. If a `CHAIO_CREWCHIEF_URL` gateway is genuinely
-   unreachable, suggest checking it on the host that runs it
-   (`systemctl status chaio-crewchief llama-server`).
+   - Note the provider mix if interesting (local vs cloud vs frontier). Stats
+     rows are per model×outcome and carry no `provider_class` — that field is
+     on attempt rows, so get the mix from `crewchief_history` if you want it.
+4. If `crewchief_health` reports the gateway is up but no models are
+   configured, that is a config gap, not a fleet outage — say so. Crew Chief's
+   own error names the right fix and you should pass it through: if
+   `models.yaml` does not exist yet, `chaio-crewchief init` writes a starter
+   file; if it exists, `init` already ran and every preset in it is still
+   commented out, so the fix is to uncomment one and point it at a real
+   endpoint. Either way the session has to restart afterward.
+5. If a `CHAIO_CREWCHIEF_URL` gateway is genuinely unreachable, say which URL
+   failed and suggest checking whatever host runs that gateway — and the model
+   endpoints behind it. How it is supervised is the operator's choice; this
+   repo ships no service units, so do not name one. (`systemctl status
+   chaio-crewchief` is what it looks like on one deployment, not a general
+   instruction.)
 
 Keep it to a short table or a few lines — this is a glance, not a report.
