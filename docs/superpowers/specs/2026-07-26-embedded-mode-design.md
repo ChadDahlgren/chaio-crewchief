@@ -72,9 +72,16 @@ func (i *Instance) Close() error   // shut the listener, release the lock, close
 
 `Start` performs the same sequence `serve()` does today — registry, rates,
 store, archive, routing, provider, `engine.NewWithRouter`, `server.New` — then
-listens on `127.0.0.1:0` and serves. `serve()` is refactored to call the same
-wiring with its flag-supplied paths, so the codebase has one wiring path rather
-than two.
+listens on `127.0.0.1:0` and serves.
+
+`serve()` keeps its own copy of that sequence rather than being refactored onto
+a shared one. What needed sharing was the **handlers**, not the constructor
+calls: `/stats` and `/history` hold the aggregation where a divergence would
+make `usage` and `crewchief_stats` disagree about money, and both modes get
+those from `server.New`. The constructor sequence contains no logic to drift,
+and if a constructor's signature changes the compiler catches both call sites.
+Refactoring the code path the production service runs, to deduplicate fifteen
+lines with no behavior in them, is not worth the risk.
 
 `mcp` in embedded mode calls `Start` and points the existing `mcpserve` client
 at the returned `BaseURL`. `mcpserve` itself changes only in how its base URL is
