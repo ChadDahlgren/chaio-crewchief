@@ -7,7 +7,7 @@ Five-minute tour of the fleet. Run these in any Claude Code session with the
 > `/chaio-crewchief:status`
 
 Health per preset + the ledger (real spend vs frontier counterfactual).
-Baseline the `attempts` and `cost_usd` numbers — exercises 2–3 will move them.
+Baseline the `attempts` and `cost_usd` numbers — exercises 2 and 4 will move them.
 
 ## 2. Spawn a fleet worker (2–3 min)
 > Use the fleet-worker agent with this work order: a Python function

@@ -5,7 +5,11 @@
 #
 # Opt in (plugins can't ship statuslines) — in ~/.claude/settings.json:
 #   "statusLine": { "type": "command",
-#     "command": "bash ~/.claude/plugins/<...>/chaio-crewchief/scripts/fleet-statusline.sh" }
+#     "command": "bash <plugin-dir>/scripts/fleet-statusline.sh" }
+# where <plugin-dir> is the installed copy, currently
+# ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>. The version segment
+# means the path changes on upgrade; find yours with
+#   ls -d ~/.claude/plugins/cache/*/*/*/scripts/fleet-statusline.sh
 # Set FLEET_INNER_STATUSLINE to your previous script to keep its output.
 #
 # Requires CHAIO_CREWCHIEF_URL. Without it, this script appends nothing and
@@ -42,7 +46,18 @@ fi
 if [ -z "$fresh" ] && [ -n "${CHAIO_CREWCHIEF_URL:-}" ]; then
   stats=$(curl -s -m 2 "${CHAIO_CREWCHIEF_URL%/}/stats" 2>/dev/null)
   if [ -n "$stats" ]; then
-    fresh=$(echo "$stats" | jq -r '.totals | "fleet: $\(.cost_usd|.*100|round/100) vs $\(.counterfactual_usd|round) (\(.savings_pct*100|round)% saved)"' 2>/dev/null)
+    # No rates table means no frontier price, so there is no percentage to
+    # report — "0% saved" would be a claim, not a reading. Same for a ledger
+    # with no attempts, and for a run that cost more than the frontier would
+    # have, which is not savings at all.
+    fresh=$(echo "$stats" | jq -r '.totals |
+      "fleet: $\(.cost_usd|.*100|round/100)" as $spend |
+      if (.counterfactual_configured != true) then "\($spend) (savings n/a: no rates.yaml)"
+      elif (.attempts == 0) then "\($spend) (savings n/a: no attempts)"
+      elif (.counterfactual_usd <= 0) then "\($spend) (savings n/a)"
+      elif (.cost_usd > .counterfactual_usd) then "\($spend) vs $\(.counterfactual_usd|round) (over frontier)"
+      else "\($spend) vs $\(.counterfactual_usd|round) (\(.savings_pct*100|round)% saved)"
+      end' 2>/dev/null)
     [ -n "$fresh" ] && echo "$fresh" > "$CACHE"
   fi
 fi
