@@ -4,12 +4,16 @@ description: Delegate well-specified coding work to the cheap model fleet (local
 ---
 
 Route implementation work through the Crew Chief gateway instead of writing the
-code yourself. Crew Chief relays the task and returns whatever the model
-produced — it does not judge quality. **You are the verification step.**
-The economics still favor this: fleet models solve well-specified
-single-file tasks at frontier quality for ~1/10th to $0 cost when the answer
-is right — but "right" is something you have to check yourself every time,
-by reading the artifact and, ideally, running it.
+code yourself. Crew Chief relays the task to a cheaper model and returns
+whatever that model produced — it does not judge quality. **You are the
+verification step.**
+
+What the gateway gives you is a measurement, not a guarantee. Every attempt is
+recorded in the ledger with the model, wall time, tokens, what it actually cost,
+and what the same tokens would have cost at frontier prices — so you can see
+what delegation is worth *on your own work* rather than take a claim about it.
+Whether the output is any good is a separate question, and answering it is your
+job every time: read the artifact, and ideally run it.
 
 ## How to delegate
 
