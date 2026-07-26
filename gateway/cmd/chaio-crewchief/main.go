@@ -9,15 +9,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/archive"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/cli"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/embed"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/engine"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/gwurl"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/mcpserve"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/ownership"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/provider"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/rates"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/registry"
@@ -88,16 +93,18 @@ const defaultAddr = "127.0.0.1:8181"
 
 func main() {
 	// Subcommands: `chaio-crewchief serve` (default when omitted), `chaio-crewchief mcp`,
-	// `chaio-crewchief doctor`, `chaio-crewchief usage`. Bare `chaio-crewchief [flags]` still serves,
+	// `chaio-crewchief doctor`, `chaio-crewchief usage`, `chaio-crewchief init`. Bare `chaio-crewchief [flags]` still serves,
 	// so existing systemd units keep working.
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
 		case "mcp":
-			if err := mcpserve.Run(context.Background(), version); err != nil {
+			if err := runMCP(); err != nil {
 				log.Fatalf("mcp: %v", err)
 			}
 			return
+		case "init":
+			os.Exit(cli.Init(os.Stdout, os.Args[2:]))
 		case "doctor":
 			os.Exit(cli.Doctor(os.Stdout, os.Args[2:]))
 		case "usage":
@@ -110,6 +117,42 @@ func main() {
 		}
 	}
 	serve()
+}
+
+// runMCP serves MCP over stdio, against an embedded gateway by default or a
+// remote one when CHAIO_CREWCHIEF_URL names it.
+//
+// Startup errors go to stderr in full, because that is what lands in the MCP
+// logs — Claude Code itself shows only "server failed to start".
+func runMCP() error {
+	ctx := context.Background()
+	mode, url := gwurl.Resolve()
+
+	if mode == gwurl.ModeGateway {
+		return mcpserve.RunWith(ctx, version, mcpserve.Options{
+			BaseURL: url,
+			// A remote gateway owns its own roster; asking about it here would
+			// mean a second round trip before the first tool call.
+			ModelsConfigured: true,
+		})
+	}
+
+	paths, err := chome.Resolve()
+	if err != nil {
+		return err
+	}
+	inst, err := embed.Start(ctx, embed.Config{Paths: paths})
+	if err != nil {
+		return err
+	}
+	defer inst.Close()
+
+	return mcpserve.RunWith(ctx, version, mcpserve.Options{
+		BaseURL:          inst.BaseURL,
+		Embedded:         true,
+		ModelsConfigured: inst.ModelsConfigured,
+		ModelsPath:       paths.Models,
+	})
 }
 
 // isLoopback reports whether addr binds only the local host. A bare-port or
@@ -152,6 +195,20 @@ func serve() {
 		log.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+
+	lockDir := filepath.Join(filepath.Dir(*dbPath), "locks")
+	owner, err := ownership.Acquire(lockDir)
+	if err != nil {
+		log.Fatalf("acquire ownership lock: %v", err)
+	}
+	defer owner.Release()
+	st.AssumeOwnership(owner.PID(), ownership.Host())
+
+	if n, err := st.ReapOrphans(context.Background(), lockDir, ownership.Host()); err != nil {
+		log.Printf("warning: reaping orphaned requests failed: %v", err)
+	} else if n > 0 {
+		log.Printf("failed %d orphaned request(s) left by exited processes", n)
+	}
 
 	arch, err := archive.New(*archivePath)
 	if err != nil {
