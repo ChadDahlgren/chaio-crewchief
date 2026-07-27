@@ -10,6 +10,14 @@ between minor versions. Breaking changes will always be called out here.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-26
+
+Makes the Claude Code plugin work on its own. Before this release
+`chaio-crewchief mcp` was a proxy to a gateway you had to be running
+separately, so a fresh install registered a plugin that then failed every
+call. Read the Changed section before upgrading — the default mode changed,
+and an existing `serve` deployment needs two things checked.
+
 ### Added
 
 - Embedded mode: `chaio-crewchief mcp` now runs the gateway in-process, so the
@@ -207,5 +215,6 @@ than a diff against something installable.
 - No authentication exists. The threat model is documented in
   [SECURITY.md](SECURITY.md) — read it before exposing the port.
 
-[Unreleased]: https://github.com/ChadDahlgren/chaio-crewchief/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ChadDahlgren/chaio-crewchief/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ChadDahlgren/chaio-crewchief/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ChadDahlgren/chaio-crewchief/releases/tag/v0.4.0
