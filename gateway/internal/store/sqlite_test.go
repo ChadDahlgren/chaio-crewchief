@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/ownership"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/types"
 )
 
@@ -271,5 +274,219 @@ func TestRequestResultRoundtrip(t *testing.T) {
 
 	if _, found, _ := s.GetRequest(ctx, "nope"); found {
 		t.Fatal("GetRequest should not find unknown id")
+	}
+}
+
+func TestReapOrphansOnlyFailsDeadLocalRows(t *testing.T) {
+	dir := t.TempDir()
+	lockDir := filepath.Join(dir, "locks")
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	host := ownership.Host()
+
+	// A live owner: this process, holding its lock.
+	live, err := ownership.Acquire(lockDir)
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	defer live.Release()
+
+	// The real path: a process announces its ownership once, and every row it
+	// records afterwards is stamped at INSERT. Re-announcing between seeds is
+	// how one test stands in for several differently-owned processes.
+	seed := func(id string, pid int, h string, status types.DelegateStatus) {
+		st.AssumeOwnership(pid, h)
+		if err := st.RecordRequest(ctx, id, types.DelegateRequest{Task: "t"}, status); err != nil {
+			t.Fatalf("RecordRequest(%s) error = %v", id, err)
+		}
+	}
+	seed("dead-local", 999999, host, types.StatusRunning)     // no lock file -> orphan
+	seed("live-local", live.PID(), host, types.StatusRunning) // lock held -> must survive
+	seed("other-host", 999998, "some-other-box", types.StatusRunning)
+	// A finished row must never be touched regardless of owner.
+	seed("done", 999997, host, types.StatusDelivered)
+
+	n, err := st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if n != 1 {
+		t.Errorf("ReapOrphans() reaped %d rows, want 1", n)
+	}
+
+	want := map[string]types.DelegateStatus{
+		"dead-local": types.StatusFailed,
+		"live-local": types.StatusRunning,
+		"other-host": types.StatusRunning,
+		"done":       types.StatusDelivered,
+	}
+	for id, wantStatus := range want {
+		rec, ok, err := st.GetRequest(ctx, id)
+		if err != nil || !ok {
+			t.Fatalf("GetRequest(%s) ok=%v err=%v", id, ok, err)
+		}
+		if rec.Status != wantStatus {
+			t.Errorf("%s status = %q, want %q", id, rec.Status, wantStatus)
+		}
+	}
+}
+
+// The lock directory is created before the first reap so OwnerAlive can
+// actually resolve dead-vs-live rather than treating a missing lockDir as
+// "unsure, assume alive" (see internal/ownership). Without this, the first
+// reap would fail 0 rows and the test would demonstrate nothing.
+func TestReapOrphansIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	lockDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	host := ownership.Host()
+
+	st.AssumeOwnership(999999, host)
+	if err := st.RecordRequest(ctx, "x", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("first ReapOrphans() reaped %d rows, want 1", n)
+	}
+	n, err = st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatalf("second ReapOrphans() error = %v", err)
+	}
+	if n != 0 {
+		t.Errorf("second ReapOrphans() reaped %d rows, want 0", n)
+	}
+}
+
+// Rows written before the owner columns existed have no owner. They must not
+// be reaped on the strength of a zero PID.
+func TestReapOrphansSkipsRowsWithNoRecordedOwner(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	// Host must match, or the row is skipped by the host guard and the pid
+	// guard is never reached. Pid 0 is what a pre-ownership row carries.
+	st.AssumeOwnership(0, ownership.Host())
+	if err := st.RecordRequest(ctx, "legacy", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	// The lock directory must exist. OwnerAlive treats a missing lockDir as
+	// ambiguous and answers "alive" for every row, so a test that skips this
+	// never reaches the owner_pid > 0 guard it claims to be checking — deleting
+	// that guard used to leave this test green.
+	lockDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.ReapOrphans(ctx, lockDir, ownership.Host())
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if n != 0 {
+		t.Errorf("ReapOrphans() reaped %d unowned rows, want 0", n)
+	}
+}
+
+// Without this, ReapOrphans silently never fires in production: the engine
+// records requests knowing nothing about processes, so every row would carry
+// owner_pid 0 and be skipped.
+func TestRecordRequestStampsAssumedOwner(t *testing.T) {
+	dir := t.TempDir()
+	lockDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	host := ownership.Host()
+
+	st.AssumeOwnership(999999, host) // a PID with no lock: an orphan by construction
+	if err := st.RecordRequest(ctx, "stamped", types.DelegateRequest{Task: "t"}, types.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.ReapOrphans(ctx, lockDir, host)
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("ReapOrphans() = %d, want 1; RecordRequest did not stamp the owner", n)
+	}
+}
+
+// The DSN pragmas are the difference between a losing writer waiting and a
+// losing writer returning "database is locked (5)" to a user who did nothing
+// wrong. Assert they actually took effect rather than that the string was
+// assembled: the driver applies them per connection, and a syntax it silently
+// ignored would look identical from the outside.
+func TestOpenAppliesWALAndBusyTimeout(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	var mode string
+	if err := st.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if !strings.EqualFold(mode, "wal") {
+		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+
+	var timeout int
+	if err := st.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", timeout)
+	}
+}
+
+// Paths are relative by default (serve's --db is "./chaio-crewchief.db") and
+// this repo lives under a path with a space in it. Appending a query string to
+// a bare path must not disturb either.
+func TestOpenHandlesAwkwardPaths(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a dir with spaces")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "t.db")
+	st, err := Open(db)
+	if err != nil {
+		t.Fatalf("Open(%q) error = %v", db, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := os.Stat(db); err != nil {
+		t.Errorf("database not created at %q: %v", db, err)
 	}
 }

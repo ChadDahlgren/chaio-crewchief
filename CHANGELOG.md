@@ -10,6 +10,137 @@ between minor versions. Breaking changes will always be called out here.
 
 ## [Unreleased]
 
+### Added
+
+- Embedded mode: `chaio-crewchief mcp` now runs the gateway in-process, so the
+  plugin works after `brew install` with nothing else running.
+- `chaio-crewchief init` writes a starter `models.yaml` to `~/.chaio-crewchief`.
+- `--local` and `--gateway` on `usage` and `doctor` to pick a ledger explicitly.
+- Requests left running by a process that exited are failed on startup instead
+  of reporting a stale status forever. Reaping runs before the new process takes
+  its own ownership lock: lock files outlive their processes and pids are
+  reallocated, so a process that draws a dead owner's pid would otherwise be
+  holding that owner's lock file while checking it, read the dead owner as
+  alive, and strand its rows in `running` permanently.
+
+  Rows already left `running` by a *previous* release are not reaped, and will
+  not be: they carry `owner_pid = 0`, which the reap guard skips by design,
+  since a row with no recorded owner cannot be shown to be abandoned. An
+  upgrader with a long history will therefore see permanently stale `running`
+  rows in `/history` — a fixture with 16,700 attempts had 334 of them. That is
+  the guard working, not the reaper failing; only rows recorded by this release
+  onward carry an owner to check.
+
+### Changed
+
+- `usage` no longer reports a missing counterfactual as `savings: $0.00 (0.0%)`.
+  With no frontier reference rate — no `rates.yaml`, or one that declares no
+  `counterfactual:` block — there is no price to compare against, so it prints
+  `savings: n/a` with the reason and no percentage at all; the same goes
+  for a ledger with no attempts yet. When a run cost more than the frontier
+  would have, it is reported as `overspend` with a ratio rather than as
+  negative savings with an unbounded percentage. `GET /stats` gained
+  `counterfactual_configured` to carry the distinction over the wire, since a
+  real zero and an unpriced ledger are otherwise identical. Negative dollar
+  amounts now print as `-$3.75` rather than `$-3.7500`.
+
+  A gateway older than this release does not send `counterfactual_configured`
+  at all, so `usage` and `fleet-statusline.sh` trust the flag only when
+  `counterfactual_usd` is itself zero. This matters because the CLI and the
+  daemon upgrade separately — `brew upgrade` moves the CLI while a running
+  `serve` stays on the old binary until it is restarted — and without the
+  check a new CLI against an old gateway would print `savings: n/a` directly
+  beneath a real, non-zero counterfactual.
+- **Breaking:** an unset `CHAIO_CREWCHIEF_URL` now selects embedded mode rather
+  than defaulting to `http://localhost:8181`. Set the variable explicitly to
+  keep proxying to a gateway.
+- **Breaking:** `crewchief_delegate` now refuses `async: true` in embedded
+  mode, which is the default mode, and returns an error naming the fix. An
+  async job returns a request ID and finishes in the background; the embedded
+  gateway dies with the MCP session, so the job would vanish rather than
+  finish and `crewchief_request` would poll a request nobody is running.
+  Before this release an unset `CHAIO_CREWCHIEF_URL` proxied to
+  `http://localhost:8181`, where async worked — so a caller that relied on it
+  will now get an error where it previously got a request ID. Set
+  `CHAIO_CREWCHIEF_URL` to a `serve` gateway to keep async, or drop `async` to
+  run the delegation synchronously. `POST /delegate` with `async: true` against
+  a `serve` gateway is unchanged.
+- **Breaking:** `CHAIO_CREWCHIEF_HOME` must now be an absolute path; a relative
+  value is rejected at startup instead of being resolved against the process's
+  working directory. This includes a literal unexpanded `~`, which is what a
+  quoted value in an MCP server config JSON produces — it used to create a
+  directory named `~` and report success. Claude Code launches the MCP server
+  with an arbitrary working directory, so a relative home meant the CLI and the
+  MCP session could silently use different ledgers and different lock
+  directories.
+- `~/.chaio-crewchief/` (or `CHAIO_CREWCHIEF_HOME`) is the default location for
+  config and the ledger for the MCP server and the CLI subcommands (`usage`,
+  `doctor`, `init`) when paths are not given as flags. `serve` is unaffected:
+  it ignores `CHAIO_CREWCHIEF_HOME` entirely and its flag defaults remain
+  relative to the working directory.
+- **Breaking:** a delegation now fails when its opening ledger write fails,
+  instead of running anyway against a request the ledger never recorded.
+  Without that row every status update silently no-ops, an async caller polling
+  `GET /requests/{id}` gets 404 forever, and orphan reaping can never see the
+  request. For `serve` this is an HTTP behavior change: `POST /delegate` can
+  now return 500 where it previously returned an artifact — in practice only
+  when the ledger is unwritable or locked past the retry budget. This guards
+  request bookkeeping, not spend: attempt rows, which carry the cost, are still
+  best-effort. A failed attempt write used to be discarded silently; it is now
+  logged loudly. It has never aborted the delegation, whose tokens are already
+  billed either way.
+- Schema migrations now run inside a transaction each, taken with
+  `BEGIN IMMEDIATE`, so an interruption leaves the database at a migration
+  boundary — the last one that committed — rather than half-migrated with
+  nothing recorded, a state that used to brick the ledger until someone
+  hand-edited `schema_migrations`. This is per migration, not per upgrade: an
+  interruption partway through a multi-step upgrade lands consistently at an
+  earlier version, not back at the original one. Databases
+  already in that state heal themselves on the next open. `Open` also retries a
+  locked database with a short backoff, since embedded mode makes concurrent
+  first-opens normal and the WAL conversion takes a lock `busy_timeout` does
+  not cover.
+- Embedded mode logs a warning on every start when no `rates.yaml` is present,
+  naming the path it looked for. Without a rates table there is no frontier
+  price to compare against, so the savings number — the thing the tool exists
+  to report — cannot be computed at all. A fresh ledger otherwise looks like a
+  fleet that is genuinely free; an existing ledger that accumulated real costs
+  looks worse still, since `cost_usd` is priced per attempt at write time and
+  never recomputed, leaving positive spend measured against nothing.
+- `serve` now creates a `locks/` directory alongside its `--db` and takes an
+  ownership lock inside it, so a process can tell whether the owner of an
+  in-flight ledger row is still alive. This is a new writable-directory
+  requirement for existing deployments: `serve` must be able to create a
+  subdirectory next to `--db`. It does not fail to start if it cannot — it logs
+  a warning and disables orphan reaping, which leaves requests abandoned by an
+  exited process stuck in `running` until cleaned up by hand.
+- `fleet-statusline.sh` no longer falls back to `http://localhost:8181` when
+  `CHAIO_CREWCHIEF_URL` is unset; it now passes the inner statusline through
+  untouched. Embedded mode has no fixed address to curl — the gateway runs
+  in-process on a kernel-assigned ephemeral loopback port — so embedded-mode
+  users get no fleet statusline. This is a deliberate trade, not an
+  improvement: silence beats a false "gateway unreachable" on every prompt of
+  a session where delegation is working fine.
+- The ledger opens with `journal_mode=WAL` and a `busy_timeout` instead of the
+  default rollback journal, since embedded mode made it multi-writer by
+  design. On an existing deployment, the mode is persisted into the database
+  file the first time it's opened by the new binary, and two sibling files,
+  `-wal` and `-shm`, appear next to it from then on — the containing
+  directory needs to be writable, which the rollback journal already
+  required, so this adds no new permission requirement. WAL needs shared
+  memory and does not work on NFS, and there is no way to opt out: the journal
+  mode is part of the connection string and is reapplied on every connection,
+  so `PRAGMA journal_mode=DELETE` is undone by the next open. **A ledger on a
+  network filesystem has to move to local disk** — point `CHAIO_CREWCHIEF_HOME`
+  (or `serve --db`) somewhere local.
+
+### Security
+
+- Embedded mode binds an unauthenticated ephemeral port on `127.0.0.1` for the
+  life of the MCP session. Any local process can reach it while it is up. The
+  threat model is in [SECURITY.md](SECURITY.md); it matters most on shared or
+  multi-user machines.
+
 ## [0.4.0] — 2026-07-26
 
 First public release. Earlier versions existed only in a private deployment

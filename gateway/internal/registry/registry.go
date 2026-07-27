@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sync"
 	"time"
@@ -19,6 +20,13 @@ var (
 	ErrMultipleDefaults = errors.New("multiple presets marked as default")
 	ErrInvalidYAML      = errors.New("invalid YAML structure")
 	ErrPresetValidation = errors.New("preset validation failed")
+
+	// ErrNotFound reports that the registry file does not exist, as distinct from
+	// existing and being unreadable or malformed. Embedded mode tolerates a
+	// missing models.yaml — a fresh install has none — but a malformed one must
+	// stay a loud failure, because silently treating a YAML typo as "no models
+	// configured" would send the user hunting in the wrong place.
+	ErrNotFound = errors.New("registry file not found")
 )
 
 type registryImpl struct {
@@ -129,6 +137,9 @@ type yamlConfig struct {
 func LoadRegistry(path string) (types.Registry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, path)
+		}
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 

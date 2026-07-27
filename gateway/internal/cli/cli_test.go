@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -90,10 +91,144 @@ func TestRenderUsageShape(t *testing.T) {
 	s.Totals.CostUSD = 0.5
 	s.Totals.CounterfactualUSD = 10
 	s.Totals.SavingsPct = 0.95
+	s.Totals.CounterfactualConfigured = true
 	out := RenderUsage(s)
-	for _, want := range []string{"CREW CHIEF USAGE", "1,234,567", "$0.50", "$9.50 (95.0%)"} {
+	for _, want := range []string{"CREW CHIEF USAGE", "1,234,567", "$0.50", "savings:  $9.50 (95.0%)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestMoneySign(t *testing.T) {
+	for _, tc := range []struct {
+		in   float64
+		want string
+	}{
+		{0, "$0.00"},
+		// v < 0 is false for negative zero while v == 0 is true, so the naive
+		// test takes the v == 0 branch and %.2f puts the sign back inside the
+		// currency symbol: "$-0.00".
+		{math.Copysign(0, -1), "-$0.00"},
+		{3.75, "$3.75"},
+		{0.5, "$0.5000"},
+		{-3.75, "-$3.75"},
+		{-0.5, "-$0.5000"},
+		{math.NaN(), "n/a"},
+		{math.Inf(1), "n/a"},
+		{math.Inf(-1), "n/a"},
+	} {
+		if got := money(tc.in); got != tc.want {
+			t.Errorf("money(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The savings number is the product; each of these is a shape it must not
+// misreport. "n/a" with a reason is a real answer, "0.0%" beside a negative
+// dollar figure is two contradictory claims.
+func TestSavingsLine(t *testing.T) {
+	mk := func(attempts int, cost, cf float64, configured bool, pct float64) statsResp {
+		var s statsResp
+		s.Totals.Attempts = attempts
+		s.Totals.CostUSD = cost
+		s.Totals.CounterfactualUSD = cf
+		s.Totals.CounterfactualConfigured = configured
+		s.Totals.SavingsPct = pct
+		return s
+	}
+	tests := []struct {
+		name    string
+		s       statsResp
+		want    string
+		absent  []string
+		present []string
+	}{
+		{
+			// The message must not name a file the CLI never looked for: this
+			// same shape is produced by a rates.yaml that exists but has no
+			// `counterfactual:` block.
+			name:   "no frontier reference rate, ledger has real spend",
+			s:      mk(12, 3.75, 0, false, 0),
+			want:   "savings:  n/a — no frontier reference rate configured; add a `counterfactual:` block to rates.yaml\n",
+			absent: []string{"%", "0.0", "no rates.yaml"},
+		},
+		{
+			// A pre-0.5 gateway omits counterfactual_configured entirely, so it
+			// decodes to false beside a real, priced counterfactual. Reporting
+			// "no frontier price" there loses the headline number on every
+			// upgrade where the CLI moves ahead of the daemon.
+			name:    "old gateway: flag absent but counterfactual is real",
+			s:       mk(16700, 0, 551.10, false, 1.0),
+			present: []string{"savings:  $551.10", "100.0%"},
+			absent:  []string{"n/a"},
+		},
+		{
+			name:   "negative counterfactual is not described as $0.00",
+			s:      mk(5, 1, -20, true, 0),
+			want:   "savings:  n/a — the frontier counterfactual priced to -$20.00, which is not a price\n",
+			absent: []string{"$0.00", "%"},
+		},
+		{
+			// "overspend: $0.0001 — this ran 1.0x the frontier price" states a
+			// difference the ratio it prints denies.
+			name:    "near parity does not print a 1.0x overspend",
+			s:       mk(4, 10.0001, 10.0, true, 0),
+			absent:  []string{"overspend", "1.0x", "%"},
+			present: []string{"frontier price"},
+		},
+		{
+			name:   "zero attempts",
+			s:      mk(0, 0, 0, true, 0),
+			want:   "savings:  n/a — no attempts recorded yet\n",
+			absent: []string{"%"},
+		},
+		{
+			name: "normal savings",
+			s:    mk(3, 0.10, 5, true, 0.98),
+			want: "savings:  $4.90 (98.0%)\n",
+		},
+		{
+			name:    "cost above counterfactual is overspend, not savings",
+			s:       mk(3, 10, 1, true, -9),
+			absent:  []string{"savings", "%"},
+			present: []string{"overspend: $9.00", "10.0x"},
+		},
+		{
+			name:    "partial rates: tiny counterfactual reads as a ratio, not -3749900%",
+			s:       mk(9, 3.75, 0.0001, true, -37499),
+			absent:  []string{"%"},
+			present: []string{"overspend:"},
+		},
+		{
+			name:   "counterfactual priced to zero with attempts present",
+			s:      mk(9, 3.75, 0, true, 0),
+			want:   "savings:  n/a — the frontier counterfactual priced to $0.00, so there is nothing to compare against\n",
+			absent: []string{"%"},
+		},
+		{
+			name:   "non-finite totals never reach the user as $NaN",
+			s:      mk(2, math.NaN(), 5, true, math.NaN()),
+			want:   "savings:  n/a — the ledger totals are not a usable number\n",
+			absent: []string{"NaN", "%"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := savingsLine(tt.s)
+			if tt.want != "" && got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+			for _, a := range tt.absent {
+				if strings.Contains(got, a) {
+					t.Errorf("line must not contain %q: %q", a, got)
+				}
+			}
+			for _, p := range tt.present {
+				if !strings.Contains(got, p) {
+					t.Errorf("line must contain %q: %q", p, got)
+				}
+			}
+		})
 	}
 }

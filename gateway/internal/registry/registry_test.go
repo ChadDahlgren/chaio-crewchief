@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -105,6 +106,30 @@ models:
 `)
 	if _, err := LoadRegistry(p); err == nil {
 		t.Fatal("expected error for empty base_url")
+	}
+}
+
+func TestLoadRegistryMissingFileIsDistinguishable(t *testing.T) {
+	_, err := LoadRegistry(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err == nil {
+		t.Fatal("LoadRegistry(absent) = nil error, want ErrNotFound")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("errors.Is(err, ErrNotFound) = false; err = %v", err)
+	}
+}
+
+func TestLoadRegistryMalformedIsNotNotFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.yaml")
+	if err := os.WriteFile(path, []byte("models: [oh no: :"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadRegistry(path)
+	if err == nil {
+		t.Fatal("LoadRegistry(malformed) = nil error, want an error")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("malformed YAML reported as ErrNotFound; it must stay a loud failure")
 	}
 }
 

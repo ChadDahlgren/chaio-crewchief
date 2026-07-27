@@ -64,7 +64,14 @@ type DelegateStatus string
 const (
 	StatusDelivered DelegateStatus = "delivered" // a response came back; caller judges it
 	StatusFailed    DelegateStatus = "failed"    // every attempt was a mechanical failure
-	StatusRunning   DelegateStatus = "running"   // async only, in flight
+	// StatusRunning is recorded for every request, not just async ones:
+	// engine.RunWithID writes it before the first provider call and overwrites
+	// it on the way out. That is what justifies the orphan-reaping machinery —
+	// the likeliest way a row is stranded in "running" is an ordinary
+	// synchronous delegation interrupted by the user closing Claude Code, not
+	// an async job. Do not read this as async-only and conclude reaping is dead
+	// code in embedded mode.
+	StatusRunning DelegateStatus = "running"
 )
 
 // DelegateResult is the terminal answer for a request.

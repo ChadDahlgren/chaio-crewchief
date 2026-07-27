@@ -15,9 +15,13 @@ import (
 	"time"
 
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/archive"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/cli"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/embed"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/engine"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/gwurl"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/mcpserve"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/ownership"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/provider"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/rates"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/registry"
@@ -67,6 +71,9 @@ func (l *liveRates) Price(model string, promptTokens, outputTokens int) float64 
 func (l *liveRates) Counterfactual(promptTokens, outputTokens int) float64 {
 	return l.current.Load().(rates.Table).Counterfactual(promptTokens, outputTokens)
 }
+func (l *liveRates) HasCounterfactual() bool {
+	return l.current.Load().(rates.Table).HasCounterfactual()
+}
 
 // serviceName is the single place the display/log name lives, so the
 // service can be renamed without hunting through the codebase.
@@ -88,16 +95,18 @@ const defaultAddr = "127.0.0.1:8181"
 
 func main() {
 	// Subcommands: `chaio-crewchief serve` (default when omitted), `chaio-crewchief mcp`,
-	// `chaio-crewchief doctor`, `chaio-crewchief usage`. Bare `chaio-crewchief [flags]` still serves,
+	// `chaio-crewchief doctor`, `chaio-crewchief usage`, `chaio-crewchief init`. Bare `chaio-crewchief [flags]` still serves,
 	// so existing systemd units keep working.
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
 		case "mcp":
-			if err := mcpserve.Run(context.Background(), version); err != nil {
+			if err := runMCP(); err != nil {
 				log.Fatalf("mcp: %v", err)
 			}
 			return
+		case "init":
+			os.Exit(cli.Init(os.Stdout, os.Args[2:]))
 		case "doctor":
 			os.Exit(cli.Doctor(os.Stdout, os.Args[2:]))
 		case "usage":
@@ -110,6 +119,46 @@ func main() {
 		}
 	}
 	serve()
+}
+
+// runMCP serves MCP over stdio, against an embedded gateway by default or a
+// remote one when CHAIO_CREWCHIEF_URL names it.
+//
+// Startup errors go to stderr in full, because that is what lands in the MCP
+// logs — Claude Code itself shows only "server failed to start".
+func runMCP() error {
+	ctx := context.Background()
+	mode, url := gwurl.Resolve()
+
+	if mode == gwurl.ModeGateway {
+		return mcpserve.RunWith(ctx, version, mcpserve.Options{
+			BaseURL: url,
+			// A remote gateway owns its own roster; asking about it here would
+			// mean a second round trip before the first tool call.
+			ModelsConfigured: true,
+		})
+	}
+
+	paths, err := chome.Resolve()
+	if err != nil {
+		return err
+	}
+	inst, err := embed.Start(ctx, embed.Config{Paths: paths})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := inst.Close(); closeErr != nil {
+			log.Printf("warning: close embedded gateway: %v", closeErr)
+		}
+	}()
+
+	return mcpserve.RunWith(ctx, version, mcpserve.Options{
+		BaseURL:          inst.BaseURL,
+		Embedded:         true,
+		ModelsConfigured: inst.ModelsConfigured,
+		ModelsPath:       paths.Models,
+	})
 }
 
 // isLoopback reports whether addr binds only the local host. A bare-port or
@@ -152,6 +201,52 @@ func serve() {
 		log.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+
+	// Ownership is an optimization, not a prerequisite for serving. A hardened
+	// unit (ProtectSystem=strict with ReadWritePaths naming the database and
+	// archive but not the lock directory) makes Acquire fail, and a daemon that
+	// died at boot over a reaping feature would be a far worse outcome than one
+	// that serves without it. Without ownership we are exactly at the
+	// pre-ownership behavior: rows carry owner_pid = 0, which no reap will ever
+	// touch. Reaping rows left by *earlier* processes still runs when the lock
+	// directory exists but is unwritable, since that path only reads lock
+	// files — but not when the directory cannot be created at all: OwnerAlive
+	// stats it first and answers "assume alive" for every pid, so the reaper
+	// runs and finds nothing. That is why the EnsureDir failure below warns
+	// rather than passing silently.
+	//
+	// embed.Start deliberately does not do this — there, a lock it cannot take
+	// is a genuine startup failure.
+	lockDir := chome.LocksDirFor(*dbPath)
+
+	// Reap before acquiring. Lock files outlive their processes and pids get
+	// reused — realistically after a reboot, which reallocates low ones — so
+	// acquiring first can leave this process holding the lock file of a dead
+	// owner whose pid it drew. That owner's abandoned rows would then read as
+	// live and stay `running` forever, unfixable by any later run.
+	if err := ownership.EnsureDir(lockDir); err != nil {
+		log.Printf("warning: %v; orphan reaping may be skipped this run", err)
+	}
+	if n, err := st.ReapOrphans(context.Background(), lockDir, ownership.Host()); err != nil {
+		log.Printf("warning: reaping orphaned requests failed: %v", err)
+	} else if n > 0 {
+		log.Printf("failed %d orphaned request(s) left by exited processes", n)
+	}
+
+	owner, err := ownership.Acquire(lockDir)
+	if err != nil {
+		log.Printf("warning: could not acquire ownership lock in %s: %v; "+
+			"requests this process leaves running cannot be reaped by a later one "+
+			"and will stay in that state until cleaned up by hand. Make %s writable to fix.",
+			lockDir, err, lockDir)
+	} else {
+		defer func() {
+			if relErr := owner.Release(); relErr != nil {
+				log.Printf("warning: release ownership lock: %v", relErr)
+			}
+		}()
+		st.AssumeOwnership(owner.PID(), ownership.Host())
+	}
 
 	arch, err := archive.New(*archivePath)
 	if err != nil {

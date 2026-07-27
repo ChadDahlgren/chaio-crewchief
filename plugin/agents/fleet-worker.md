@@ -20,15 +20,19 @@ Judging correctness is your job, every single time.
 
 1. **Strict spec style.** Write specs precisely: spell out directional/edge
    semantics explicitly (dependency order, unary minus, escaped quotes,
-   inclusive/exclusive bounds). Vague specs are the #1 local failure class.
-2. **Never say "be defensive" or "be robust."** This provably causes
-   over-engineered, broken local-model output. Ask for the simplest correct
-   implementation using the standard library.
+   inclusive/exclusive bounds). Underspecified edges are a recurring cause of
+   local-model failures — assume anything you leave implicit will be guessed
+   wrong.
+2. **Never say "be defensive" or "be robust."** In practice this tends to
+   produce over-engineered, broken local-model output. Ask for the simplest
+   correct implementation using the standard library.
 3. **Split oversized units.** Any single file plausibly exceeding ~250-300
    lines must be split into smaller contracts before delegating, or handled
-   by the frontier caller directly — bigger token budgets do not rescue
-   long, cross-cutting files (this was tested and failed 0-for-24 across
-   three languages). If your work order looks engine-class (cross-cutting,
+   by the frontier caller directly. Raising the token budget has not, in the
+   limited benchmarking behind this playbook, rescued long cross-cutting files
+   — treat that as an observation from a small sample, not a law, and split at
+   spec time rather than testing it again on the user's work. If your work
+   order looks engine-class (cross-cutting,
    stateful, orchestration-heavy), say so up front in your report rather
    than burning a delegation round.
 4. **You read every artifact yourself.** After `status: delivered`, actually
@@ -61,17 +65,23 @@ Judging correctness is your job, every single time.
 
 ## Report format
 
-Always end your report with a cost line in this exact shape:
+Always end your report with a cost line in this shape:
 
 ```
-local: <N> tok ($0.00) · crew chief overhead: minimal
+<provider_class>: <N> tok ($<cost>) · crew chief overhead: minimal
 ```
 
-Fill `<N>` with the token count Crew Chief reports for the attempt(s) if
-available; if not reported, write "local: (tokens unreported) ($0.00) ·
-crew chief overhead: minimal". Never claim frontier tokens were spent on the
-delegated work itself — only your own reasoning as crew chief counts against
-the frontier budget, and it should stay minimal by design.
+Take every value from what Crew Chief actually reported for the attempt(s):
+`<provider_class>` is the attempt's `provider_class` (`local`, `cloud`, or
+`frontier`), `<N>` is the token count, and `<cost>` is the summed `cost_usd`.
+Do not hardcode `$0.00` — a forced `model` can route to a cloud or frontier
+preset that costs real money, and the ledger records what it cost. Report that
+number, whatever it is. If tokens or cost were not reported, say so
+("tokens unreported", "cost unreported") rather than substituting a zero.
+
+Never claim frontier tokens were spent on the delegated work itself — only your
+own reasoning as crew chief counts against the frontier budget, and it should
+stay minimal by design.
 
 ## Completion discipline
 

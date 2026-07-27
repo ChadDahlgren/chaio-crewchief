@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -77,6 +78,9 @@ type memStore struct {
 	mu       sync.Mutex
 	attempts []types.Attempt
 	requests map[string]types.RequestRecord
+	// recordErr, when set, makes RecordRequest fail — a ledger that is locked,
+	// unwritable, or gone.
+	recordErr error
 }
 
 func newMemStore() *memStore { return &memStore{requests: map[string]types.RequestRecord{}} }
@@ -84,6 +88,9 @@ func newMemStore() *memStore { return &memStore{requests: map[string]types.Reque
 func (s *memStore) RecordRequest(ctx context.Context, id string, req types.DelegateRequest, status types.DelegateStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.recordErr != nil {
+		return s.recordErr
+	}
 	s.requests[id] = types.RequestRecord{ID: id, Status: status}
 	return nil
 }
@@ -333,5 +340,34 @@ func TestAsyncResultPersistsAndPolls(t *testing.T) {
 	rec, found, _ := store.GetRequest(context.Background(), id)
 	if !found || rec.Status != types.StatusDelivered || rec.Artifact != res.Artifact {
 		t.Fatalf("persisted record = %+v", rec)
+	}
+}
+
+// A ledger write that fails must abort the delegation, not proceed silently.
+//
+// This write used to be `_ = e.store.RecordRequest(...)`. Swallowing it meant
+// the run still billed real tokens against a model, every later
+// UpdateRequestResult no-opped against a row that did not exist, and the ledger
+// under-reported spend — the one number this project exists to produce.
+func TestRunAbortsWhenLedgerWriteFails(t *testing.T) {
+	st := newMemStore()
+	st.recordErr = errors.New("database is locked")
+	prov := &scriptedProvider{contents: []string{"```python\nprint(1)\n```"}}
+	e := New(mkRegistry(), nil, prov, st, memArchiver{}, nil)
+
+	_, err := e.Run(context.Background(), types.DelegateRequest{Task: "do it"})
+	if err == nil {
+		t.Fatal("Run() error = nil, want the ledger failure surfaced")
+	}
+	if !strings.Contains(err.Error(), "database is locked") {
+		t.Errorf("Run() error = %v, want it to name the underlying cause", err)
+	}
+
+	// The point of aborting is not spending money we cannot account for.
+	if len(prov.lastUser) != 0 {
+		t.Errorf("provider called %d times after a failed ledger write, want 0", len(prov.lastUser))
+	}
+	if len(st.attempts) != 0 {
+		t.Errorf("recorded %d attempts against an unrecorded request, want 0", len(st.attempts))
 	}
 }

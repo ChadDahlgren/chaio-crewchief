@@ -4,12 +4,16 @@ description: Delegate well-specified coding work to the cheap model fleet (local
 ---
 
 Route implementation work through the Crew Chief gateway instead of writing the
-code yourself. Crew Chief relays the task and returns whatever the model
-produced — it does not judge quality. **You are the verification step.**
-The economics still favor this: fleet models solve well-specified
-single-file tasks at frontier quality for ~1/10th to $0 cost when the answer
-is right — but "right" is something you have to check yourself every time,
-by reading the artifact and, ideally, running it.
+code yourself. Crew Chief relays the task to a cheaper model and returns
+whatever that model produced — it does not judge quality. **You are the
+verification step.**
+
+What the gateway gives you is a measurement, not a guarantee. Every attempt is
+recorded in the ledger with the model, wall time, tokens, what it actually cost,
+and what the same tokens would have cost at frontier prices — so you can see
+what delegation is worth *on your own work* rather than take a claim about it.
+Whether the output is any good is a separate question, and answering it is your
+job every time: read the artifact, and ideally run it.
 
 ## How to delegate
 
@@ -24,12 +28,22 @@ by reading the artifact and, ideally, running it.
 
 ## Model choice (the `model` or `lang` param on crewchief_delegate)
 
+Preset names are whatever the operator put in their own `models.yaml` — there
+is no fixed set, and the starter file `init` writes has none enabled. **Call
+`crewchief_models` to see the roster before naming one**; a preset that isn't
+there won't resolve.
+
 - omit both — resolves via `routing.yaml` if `lang` matches an entry, else
   the registry default
-- name an exact preset (e.g. `cf-gpt-oss-120b`) to force a specific model —
-  useful when the local GPU is busy, or as a second opinion after a
-  different model's answer looked wrong
-- `sonnet-5-ref` — frontier via the same pipe, for comparison
+- name an exact preset from the roster to force a specific model — useful when
+  the local GPU is busy, or as a second opinion after a different model's
+  answer looked wrong
+- if the roster has a frontier preset, naming it sends the same task down the
+  same pipe for comparison — and bills it at frontier rates, so say so
+
+(One deployment's roster reads `local-coder`, `cf-gpt-oss-120b`,
+`bedrock-gpt-oss-120b`, `sonnet-5-ref`. Those are examples of the shape, not
+names you can assume exist.)
 
 ## Discipline (non-negotiable)
 

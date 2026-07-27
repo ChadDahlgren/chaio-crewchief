@@ -91,3 +91,44 @@ func TestLoadMissingFileIsAllZero(t *testing.T) {
 		t.Fatalf("counterfactual = %v, want 0", got)
 	}
 }
+
+// A missing rates.yaml and a rates.yaml with no counterfactual block both mean
+// there is no frontier price to compare a local run against. Counterfactual()
+// returns 0 for both, which is indistinguishable from tokens that genuinely
+// priced to nothing — this is the signal that tells them apart, and `usage`
+// reports "n/a" rather than "0.0% savings" on the strength of it.
+func TestHasCounterfactual(t *testing.T) {
+	dir := t.TempDir()
+
+	missing, err := Load(filepath.Join(dir, "absent.yaml"))
+	if err != nil {
+		t.Fatalf("Load(missing) error = %v", err)
+	}
+	if missing.HasCounterfactual() {
+		t.Error("missing rates.yaml reports a counterfactual")
+	}
+
+	noCF := filepath.Join(dir, "nocf.yaml")
+	if err := os.WriteFile(noCF, []byte("models:\n  m:\n    input_per_mtok: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tbl, err := Load(noCF)
+	if err != nil {
+		t.Fatalf("Load(noCF) error = %v", err)
+	}
+	if tbl.HasCounterfactual() {
+		t.Error("rates.yaml without a counterfactual block reports one")
+	}
+
+	withCF := filepath.Join(dir, "cf.yaml")
+	if err := os.WriteFile(withCF, []byte("counterfactual:\n  input_per_mtok: 3\n  output_per_mtok: 15\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tbl, err = Load(withCF)
+	if err != nil {
+		t.Fatalf("Load(withCF) error = %v", err)
+	}
+	if !tbl.HasCounterfactual() {
+		t.Error("configured counterfactual not reported")
+	}
+}

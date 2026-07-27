@@ -9,21 +9,41 @@ package gwurl
 
 import "os"
 
-// DefaultURL is where the gateway listens out of the box.
-const DefaultURL = "http://localhost:8181"
+// Mode is how this process reaches a gateway.
+type Mode string
+
+const (
+	// ModeGateway proxies to a gateway someone else is running.
+	ModeGateway Mode = "gateway"
+	// ModeEmbedded runs the gateway in this process.
+	ModeEmbedded Mode = "embedded"
+)
 
 // envKeys are consulted in order, most current name first. The older names
 // are honored so configs written under this project's previous names
 // (Crew Chief, and Dispatch before that) keep working.
 var envKeys = []string{"CHAIO_CREWCHIEF_URL", "CREWCHIEF_URL", "DISPATCH_URL"}
 
-// URL returns the first non-empty gateway URL found in the environment,
-// falling back to DefaultURL.
-func URL() string {
+// URLFromEnv returns the first non-empty gateway URL in the environment, or ""
+// if none is set.
+func URLFromEnv() string {
 	for _, key := range envKeys {
 		if u := os.Getenv(key); u != "" {
 			return u
 		}
 	}
-	return DefaultURL
+	return ""
+}
+
+// Resolve reports which mode to run in, and the gateway URL when there is one.
+//
+// An unset variable means embedded, not localhost:8181. That default was the
+// worst of the available options: it produced a plugin that registered
+// successfully and then failed every call against a port nothing was listening
+// on, with nothing anywhere saying a second process was required.
+func Resolve() (Mode, string) {
+	if u := URLFromEnv(); u != "" {
+		return ModeGateway, u
+	}
+	return ModeEmbedded, ""
 }

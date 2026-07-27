@@ -2,50 +2,87 @@ package gwurl
 
 import "testing"
 
-// clear blanks every key the resolver consults, so a variable already set in
-// the developer's shell can't make a case pass or fail spuriously.
-func clear(t *testing.T) {
-	t.Helper()
-	for _, k := range envKeys {
-		t.Setenv(k, "")
+func TestResolve(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      map[string]string
+		wantMode Mode
+		wantURL  string
+	}{
+		{
+			name:     "no variables set means embedded",
+			env:      map[string]string{},
+			wantMode: ModeEmbedded,
+			wantURL:  "",
+		},
+		{
+			name:     "current variable selects gateway",
+			env:      map[string]string{"CHAIO_CREWCHIEF_URL": "http://gx10:8181"},
+			wantMode: ModeGateway,
+			wantURL:  "http://gx10:8181",
+		},
+		{
+			name:     "legacy CREWCHIEF_URL still works",
+			env:      map[string]string{"CREWCHIEF_URL": "http://old:8181"},
+			wantMode: ModeGateway,
+			wantURL:  "http://old:8181",
+		},
+		{
+			name:     "legacy DISPATCH_URL still works",
+			env:      map[string]string{"DISPATCH_URL": "http://older:8181"},
+			wantMode: ModeGateway,
+			wantURL:  "http://older:8181",
+		},
+		{
+			name: "current variable wins over legacy",
+			env: map[string]string{
+				"CHAIO_CREWCHIEF_URL": "http://new:8181",
+				"DISPATCH_URL":        "http://older:8181",
+			},
+			wantMode: ModeGateway,
+			wantURL:  "http://new:8181",
+		},
+		{
+			name:     "empty value is treated as unset",
+			env:      map[string]string{"CHAIO_CREWCHIEF_URL": ""},
+			wantMode: ModeEmbedded,
+			wantURL:  "",
+		},
+		{
+			name: "legacy CREWCHIEF_URL wins over legacy DISPATCH_URL",
+			env: map[string]string{
+				"CREWCHIEF_URL": "http://prev:8181",
+				"DISPATCH_URL":  "http://older:8181",
+			},
+			wantMode: ModeGateway,
+			wantURL:  "http://prev:8181",
+		},
+		{
+			name: "current variable wins over both legacy names when all three are set",
+			env: map[string]string{
+				"CHAIO_CREWCHIEF_URL": "http://new:8181",
+				"CREWCHIEF_URL":       "http://prev:8181",
+				"DISPATCH_URL":        "http://older:8181",
+			},
+			wantMode: ModeGateway,
+			wantURL:  "http://new:8181",
+		},
 	}
-}
-
-func TestDefaultWhenUnset(t *testing.T) {
-	clear(t)
-	if got := URL(); got != DefaultURL {
-		t.Errorf("URL() = %q, want %q", got, DefaultURL)
-	}
-}
-
-// Each supported name works on its own, including the two legacy ones.
-func TestEachKeyIsHonored(t *testing.T) {
-	for _, key := range envKeys {
-		t.Run(key, func(t *testing.T) {
-			clear(t)
-			t.Setenv(key, "http://host:9999")
-			if got := URL(); got != "http://host:9999" {
-				t.Errorf("with %s set, URL() = %q", key, got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, k := range envKeys {
+				t.Setenv(k, "")
+			}
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			mode, url := Resolve()
+			if mode != tt.wantMode {
+				t.Errorf("mode = %q, want %q", mode, tt.wantMode)
+			}
+			if url != tt.wantURL {
+				t.Errorf("url = %q, want %q", url, tt.wantURL)
 			}
 		})
-	}
-}
-
-// When several are set, the most current name wins.
-func TestPrecedence(t *testing.T) {
-	clear(t)
-	t.Setenv("DISPATCH_URL", "http://oldest:3")
-	if got := URL(); got != "http://oldest:3" {
-		t.Fatalf("URL() = %q, want the only set key", got)
-	}
-
-	t.Setenv("CREWCHIEF_URL", "http://middle:2")
-	if got := URL(); got != "http://middle:2" {
-		t.Errorf("URL() = %q, want CREWCHIEF_URL to beat DISPATCH_URL", got)
-	}
-
-	t.Setenv("CHAIO_CREWCHIEF_URL", "http://current:1")
-	if got := URL(); got != "http://current:1" {
-		t.Errorf("URL() = %q, want CHAIO_CREWCHIEF_URL to beat all", got)
 	}
 }

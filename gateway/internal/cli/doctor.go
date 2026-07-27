@@ -4,7 +4,10 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/chome"
+	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/embed"
 	"github.com/ChadDahlgren/chaio-crewchief/gateway/internal/gwurl"
 )
 
@@ -126,16 +131,67 @@ func fetchJSON(url string, v any) error {
 // Doctor runs the diagnostic against the gateway (arg 0: optional env file
 // whose keys augment the process env for key checks). Returns exit code.
 func Doctor(w io.Writer, args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(w)
+	var mf ModeFlags
+	mf.Register(fs)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+
+	// flag.Parse stops at the first non-flag argument, so a flag typed after
+	// the env-file path lands in fs.Args() unparsed and would otherwise be
+	// silently dropped — reporting success for something that never happened.
+	// Refuse instead of guessing at the user's intent.
+	rest := fs.Args()
+	for _, a := range rest {
+		if strings.HasPrefix(a, "-") {
+			fmt.Fprintf(w, "error: flags must come before the env file argument; got %q after it\n", a)
+			return 2
+		}
+	}
+
+	mode, base, err := mf.Resolve()
+	if err != nil {
+		fmt.Fprintf(w, "error: %v\n", err)
+		return 2
+	}
+
+	if mode == gwurl.ModeEmbedded {
+		paths, err := chome.Resolve()
+		if err != nil {
+			fmt.Fprintf(w, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(w, "mode: embedded (home %s)\n", paths.Home)
+		inst, err := embed.Start(context.Background(), embed.Config{Paths: paths})
+		if err != nil {
+			fmt.Fprintf(w, "error: start embedded gateway: %v\n", err)
+			return 1
+		}
+		defer func() {
+			if closeErr := inst.Close(); closeErr != nil {
+				fmt.Fprintf(w, "warning: close embedded gateway: %v\n", closeErr)
+			}
+		}()
+		base = inst.BaseURL
+	} else {
+		fmt.Fprintf(w, "mode: gateway (%s)\n", base)
+	}
+
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
 		if eq := strings.Index(kv, "="); eq > 0 {
 			env[kv[:eq]] = kv[eq+1:]
 		}
 	}
-	if len(args) > 0 {
-		data, err := os.ReadFile(args[0])
+	if len(rest) > 0 {
+		data, err := os.ReadFile(rest[0])
 		if err != nil {
-			fmt.Fprintf(w, "cannot read env file %s: %v\n", args[0], err)
+			fmt.Fprintf(w, "cannot read env file %s: %v\n", rest[0], err)
 			return 2
 		}
 		for k, v := range ParseEnvFile(string(data)) {
@@ -143,7 +199,6 @@ func Doctor(w io.Writer, args []string) int {
 		}
 	}
 
-	base := gwurl.URL()
 	var health healthResp
 	if err := fetchJSON(base+"/health", &health); err != nil {
 		fmt.Fprintf(w, "gateway: UNREACHABLE at %s (%v)\n", base, err)

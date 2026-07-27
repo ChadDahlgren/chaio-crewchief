@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -20,7 +21,15 @@ type Engine interface {
 }
 
 // StatsResponse is the /stats body: the per-bucket rows plus a whole-store
-// rollup with the frontier counterfactual — the 20%-thesis dashboard number.
+// rollup. The rollup carries the frontier counterfactual — what every attempt
+// in the ledger would have cost had the same tokens been billed at the
+// frontier rate in rates.yaml — alongside what they actually cost, so the
+// difference between the two is the number `chaio-crewchief usage` reports as
+// savings. Both are 0 when no frontier reference rate is configured — either no
+// rates.yaml or one without a `counterfactual:` block — and because a ledger
+// with zero attempts also reports 0, counterfactual_configured says which of the
+// two it is, so a reader can tell "no frontier price to compare against" from a
+// genuine break-even.
 type StatsResponse struct {
 	Rows   []types.StatRow `json:"rows"`
 	Totals StatsTotalsView `json:"totals"`
@@ -33,10 +42,16 @@ type StatsTotalsView struct {
 	CostUSD           float64 `json:"cost_usd"`
 	CounterfactualUSD float64 `json:"counterfactual_usd"`
 	SavingsPct        float64 `json:"savings_pct"`
+	// CounterfactualConfigured is false when no frontier reference rate is
+	// configured — no rates.yaml at all, or a rates.yaml with no
+	// `counterfactual:` block — i.e. counterfactual_usd and savings_pct
+	// carry no information at all rather than reporting a measured zero.
+	CounterfactualConfigured bool `json:"counterfactual_configured"`
 }
 
 // New wires the HTTP handler. rt may be nil, in which case counterfactual_usd
-// and savings_pct are always 0.
+// and savings_pct are always 0 and counterfactual_configured is false; the same
+// holds for a non-nil table with no `counterfactual:` block.
 func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver, rt rates.Table) http.Handler {
 	mux := http.NewServeMux()
 
@@ -50,6 +65,12 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 		if !req.Async {
 			res, err := eng.Run(r.Context(), req)
 			if err != nil {
+				// async defaults to false, so this is the common path — and it
+				// was the silent one: the engine's carefully worded failures
+				// ("record request in ledger: ...") reached nobody, leaving a
+				// ledger-write abort indistinguishable from any other 500. The
+				// body stays generic; internals go to the log, not the client.
+				log.Printf("delegation failed: %v", err)
 				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 				return
 			}
@@ -64,7 +85,21 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 						_ = store.UpdateRequestResult(context.Background(), reqID, types.StatusFailed, "", "panic during delegation")
 					}
 				}()
-				_, _ = eng.RunWithID(context.Background(), reqID, req)
+				// An error here means the run never got as far as a
+				// terminal status of its own — most likely the ledger write
+				// that opens RunWithID failed, so there is no row to update.
+				// The caller already holds this ID and will poll it, so record
+				// the failure rather than leaving them on a permanent 404 with
+				// no way to tell "never recorded" from "bad id". Best effort:
+				// if the ledger is what broke, this fails too, and the log line
+				// is then the only surviving trace.
+				if _, err := eng.RunWithID(context.Background(), reqID, req); err != nil {
+					log.Printf("async delegation %s failed before recording a result: %v", reqID, err)
+					if _, found, gerr := store.GetRequest(context.Background(), reqID); gerr == nil && !found {
+						_ = store.RecordRequest(context.Background(), reqID, req, types.StatusFailed)
+					}
+					_ = store.UpdateRequestResult(context.Background(), reqID, types.StatusFailed, "", err.Error())
+				}
 			}()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
@@ -156,6 +191,7 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 			CostUSD:      totals.CostUSD,
 		}
 		if rt != nil {
+			view.CounterfactualConfigured = rt.HasCounterfactual()
 			view.CounterfactualUSD = rt.Counterfactual(int(totals.PromptTokens), int(totals.OutputTokens))
 		}
 		if view.CounterfactualUSD > 0 {
