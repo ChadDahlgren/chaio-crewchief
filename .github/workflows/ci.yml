@@ -64,6 +64,18 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
+  hooks:
+    name: Hooks (shellcheck + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The gate decides whether real work gets blocked, so a regression here is
+      # worse than a broken feature — it's an operator who can't write a file.
+      - name: shellcheck
+        run: shellcheck plugin/hooks/*.sh scripts/*.sh
+      - name: Hook tests
+        run: ./plugin/hooks/test-hooks.sh
+
   build-matrix:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
