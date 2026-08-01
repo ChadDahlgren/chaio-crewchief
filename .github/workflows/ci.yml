@@ -257,6 +257,21 @@ jobs:
           # Bracket-quote the key: jq reads a bare .a-b as "a minus b".
           jq -e '.name=="chaio-crewchief" and .mcpServers["chaio-crewchief"].command=="chaio-crewchief"' plugin/.claude-plugin/plugin.json
           jq -e '.name and (.plugins | length) > 0' .claude-plugin/marketplace.json
+      - name: Manifest does not re-declare auto-discovered hooks
+        run: |
+          # hooks/hooks.json is loaded automatically. Also naming it in
+          # manifest.hooks makes Claude Code refuse the whole plugin with
+          # "Duplicate hooks file detected" — every skill, agent, and MCP tool
+          # goes with it. Shipped exactly that way in v0.6.2; caught only by
+          # installing, because a manifest can be perfectly valid JSON and still
+          # be rejected at load. manifest.hooks is for ADDITIONAL files only.
+          if [ -f plugin/hooks/hooks.json ]; then
+            jq -e '.hooks // empty | tostring | test("hooks/hooks\\.json")' \
+              plugin/.claude-plugin/plugin.json >/dev/null 2>&1 &&
+              { echo "plugin.json must not declare the auto-loaded hooks/hooks.json"; exit 1; }
+          fi
+          jq -e . plugin/hooks/hooks.json >/dev/null
+
       - name: Skills have frontmatter descriptions
         run: |
           for f in plugin/skills/*/SKILL.md; do
