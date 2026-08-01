@@ -12,24 +12,81 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Rate is one model's $/1M token pricing.
-type Rate struct {
-	InputPerMTok  float64 `yaml:"input_per_mtok"`
-	OutputPerMTok float64 `yaml:"output_per_mtok"`
+// Usage is the token breakdown of one attempt, as reported by the provider.
+//
+// It exists because pricing needs four numbers, not two: cached prompt tokens
+// bill at a discount, and reasoning tokens bill as output but are not always
+// counted in the provider's completion_tokens.
+type Usage struct {
+	// PromptTokens is the provider's total prompt count, inclusive of cached.
+	PromptTokens int
+	// CachedPromptTokens is the subset of PromptTokens served from the
+	// provider's cache, billed at CachedInputPerMTok when one is configured.
+	CachedPromptTokens int
+	// OutputTokens is the provider's completion_tokens verbatim.
+	OutputTokens int
+	// ReasoningTokens is billable output the provider generated but did not
+	// include in OutputTokens. Providers following the OpenAI convention count
+	// reasoning inside completion_tokens; for those, the provider layer leaves
+	// this at 0 so it is not billed twice. See internal/provider.
+	ReasoningTokens int
 }
 
-func (r Rate) price(promptTokens, outputTokens int) float64 {
-	return float64(promptTokens)/1_000_000*r.InputPerMTok + float64(outputTokens)/1_000_000*r.OutputPerMTok
+// Rate is one model's $/1M token pricing.
+type Rate struct {
+	InputPerMTok float64 `yaml:"input_per_mtok"`
+	// CachedInputPerMTok prices prompt tokens served from the provider's cache.
+	//
+	// A pointer because zero is a meaningful rate: providers do offer free
+	// cache reads, and a plain float64 could not tell "cached tokens are free"
+	// from "the operator never configured this." Guessing the first would price
+	// every cache hit at nothing. Nil means unconfigured, and cached tokens
+	// bill at InputPerMTok — the conservative reading, and identical to the
+	// behavior before this field existed.
+	CachedInputPerMTok *float64 `yaml:"cached_input_per_mtok"`
+	OutputPerMTok      float64  `yaml:"output_per_mtok"`
+}
+
+// cachedRate resolves the effective $/MTok for cached prompt tokens.
+func (r Rate) cachedRate() float64 {
+	if r.CachedInputPerMTok == nil {
+		return r.InputPerMTok
+	}
+	return *r.CachedInputPerMTok
+}
+
+func (r Rate) price(u Usage) float64 {
+	// Guard against a provider reporting more cached tokens than prompt tokens;
+	// a negative billable-input term would silently credit the attempt.
+	cached := u.CachedPromptTokens
+	if cached > u.PromptTokens {
+		cached = u.PromptTokens
+	}
+	if cached < 0 {
+		cached = 0
+	}
+	uncached := u.PromptTokens - cached
+	output := u.OutputTokens + u.ReasoningTokens
+
+	return float64(uncached)/1_000_000*r.InputPerMTok +
+		float64(cached)/1_000_000*r.cachedRate() +
+		float64(output)/1_000_000*r.OutputPerMTok
 }
 
 // Table prices attempts against known models and a frontier counterfactual.
 type Table interface {
-	// Price returns the USD cost of promptTokens+outputTokens against model's
-	// rate, or 0 if model is not in the table (treated as local/electricity).
-	Price(model string, promptTokens, outputTokens int) float64
-	// Counterfactual returns what the same token counts would cost at the
-	// configured frontier reference rate.
-	Counterfactual(promptTokens, outputTokens int) float64
+	// Price returns the USD cost of u against model's rate, or 0 if model is
+	// not in the table (treated as local/electricity).
+	Price(model string, u Usage) float64
+	// Counterfactual returns what the same usage would cost at the configured
+	// frontier reference rate.
+	//
+	// Cached tokens are priced at the full frontier input rate: a hypothetical
+	// frontier run has no warm cache to hit, so discounting them would credit
+	// the counterfactual for a saving it would not have had. Reasoning tokens
+	// are included for the same reason — the frontier model would have had to
+	// generate them too, and excluding them would understate what was avoided.
+	Counterfactual(u Usage) float64
 	// HasCounterfactual reports whether a frontier reference rate was actually
 	// configured. Counterfactual returns 0 both when no rates file exists and
 	// when the tokens genuinely price to nothing, and a caller reporting
@@ -47,16 +104,18 @@ type tableImpl struct {
 	counterfactual Rate
 }
 
-func (t *tableImpl) Price(model string, promptTokens, outputTokens int) float64 {
+func (t *tableImpl) Price(model string, u Usage) float64 {
 	r, ok := t.models[model]
 	if !ok {
 		return 0
 	}
-	return r.price(promptTokens, outputTokens)
+	return r.price(u)
 }
 
-func (t *tableImpl) Counterfactual(promptTokens, outputTokens int) float64 {
-	return t.counterfactual.price(promptTokens, outputTokens)
+func (t *tableImpl) Counterfactual(u Usage) float64 {
+	// Cached tokens carry no discount in the counterfactual — see Table.
+	u.CachedPromptTokens = 0
+	return t.counterfactual.price(u)
 }
 
 // HasCounterfactual is false for the empty table Load returns when rates.yaml

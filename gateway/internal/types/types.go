@@ -42,21 +42,39 @@ const (
 
 // Attempt is one model call. One DelegateRequest produces 1..(1+Retries).
 type Attempt struct {
-	ID            string         `json:"id"` // ULID
-	RequestID     string         `json:"request_id"`
-	Model         string         `json:"model"`
-	StartedAt     time.Time      `json:"started_at"`
-	WallMS        int64          `json:"wall_ms"`
-	PromptTokens  int            `json:"prompt_tokens"`
-	OutputTokens  int            `json:"output_tokens"`
-	TokPerSec     float64        `json:"tok_per_sec"`
-	Outcome       AttemptOutcome `json:"outcome"`
-	Error         string         `json:"error,omitempty"`        // truncated failure detail when Outcome is failed
-	PromptRef     string         `json:"prompt_ref"`             // Archiver ref, full request body
-	ResponseRef   string         `json:"response_ref"`           // Archiver ref, full response body
-	ArtifactRef   string         `json:"artifact_ref,omitempty"` // Archiver ref, extracted/raw content
-	ProviderClass string         `json:"provider_class"`         // local|cloud|frontier, copied from the preset
-	CostUSD       float64        `json:"cost_usd"`               // priced via internal/rates; 0 for local/unknown models
+	ID        string    `json:"id"` // ULID
+	RequestID string    `json:"request_id"`
+	Model     string    `json:"model"`
+	StartedAt time.Time `json:"started_at"`
+	WallMS    int64     `json:"wall_ms"`
+	// PromptTokens is the provider's total prompt count, inclusive of cached.
+	PromptTokens int `json:"prompt_tokens"`
+	// CachedPromptTokens is the subset of PromptTokens the provider served from
+	// cache, billed at the preset's cached rate when one is configured.
+	CachedPromptTokens int `json:"cached_prompt_tokens"`
+	// OutputTokens is the provider's completion_tokens verbatim. It is NOT
+	// total billable output — see ReasoningTokens. The meaning is deliberately
+	// unchanged from before reasoning tokens were tracked, so rows written by
+	// older versions stay truthful rather than retroactively claiming a count
+	// they never carried.
+	OutputTokens int `json:"output_tokens"`
+	// ReasoningTokens is billable output the provider generated but excluded
+	// from OutputTokens. Zero for providers that count reasoning inside
+	// completion_tokens, so it is never billed twice.
+	ReasoningTokens int            `json:"reasoning_tokens"`
+	TokPerSec       float64        `json:"tok_per_sec"`
+	Outcome         AttemptOutcome `json:"outcome"`
+	Error           string         `json:"error,omitempty"`        // truncated failure detail when Outcome is failed
+	PromptRef       string         `json:"prompt_ref"`             // Archiver ref, full request body
+	ResponseRef     string         `json:"response_ref"`           // Archiver ref, full response body
+	ArtifactRef     string         `json:"artifact_ref,omitempty"` // Archiver ref, extracted/raw content
+	ProviderClass   string         `json:"provider_class"`         // local|cloud|frontier, copied from the preset
+	CostUSD         float64        `json:"cost_usd"`               // priced via internal/rates; 0 for local/unknown models
+	// ProviderCostUSD is the provider's own billing figure when it reports one,
+	// recorded to verify CostUSD rather than to replace it. 0 means not
+	// reported — every provider that reports cost reports a non-zero one for a
+	// billed attempt, and providers that don't are locals priced at 0 anyway.
+	ProviderCostUSD float64 `json:"provider_cost_usd,omitempty"`
 }
 
 type DelegateStatus string
@@ -130,12 +148,19 @@ type CompletionRequest struct {
 }
 
 type CompletionResponse struct {
-	Content      string
-	Reasoning    string // reasoning_content if present
-	PromptTokens int
-	OutputTokens int
-	TokPerSec    float64
-	Raw          []byte // full response body for archiving
+	Content            string
+	Reasoning          string // reasoning_content if present
+	PromptTokens       int
+	CachedPromptTokens int
+	OutputTokens       int
+	// ReasoningTokens is billable output NOT already counted in OutputTokens.
+	// The provider layer zeroes it for OpenAI-convention providers, where
+	// completion_tokens is already inclusive.
+	ReasoningTokens int
+	// ProviderCostUSD is the provider's own cost for the call, 0 if unreported.
+	ProviderCostUSD float64
+	TokPerSec       float64
+	Raw             []byte // full response body for archiving
 }
 
 type Provider interface {
@@ -188,10 +213,17 @@ type StatRow struct {
 // frontier rates. Counterfactual/savings are computed by the server from
 // PromptTokens+OutputTokens via internal/rates, not stored here.
 type StatsTotals struct {
-	Attempts     int     `json:"attempts"`
-	PromptTokens int64   `json:"prompt_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	CostUSD      float64 `json:"cost_usd"`
+	Attempts           int     `json:"attempts"`
+	PromptTokens       int64   `json:"prompt_tokens"`
+	CachedPromptTokens int64   `json:"cached_prompt_tokens"`
+	OutputTokens       int64   `json:"output_tokens"`
+	ReasoningTokens    int64   `json:"reasoning_tokens"`
+	CostUSD            float64 `json:"cost_usd"`
+	// ProviderCostUSD sums the provider-reported cost of attempts that carried
+	// one; ProviderCostAttempts counts them, so a caller can say "N of M
+	// attempts reported" rather than implying the sum covers everything.
+	ProviderCostUSD      float64 `json:"provider_cost_usd"`
+	ProviderCostAttempts int     `json:"provider_cost_attempts"`
 }
 
 type Archiver interface {

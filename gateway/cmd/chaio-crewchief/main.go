@@ -65,11 +65,11 @@ func newLiveRates(initial rates.Table) *liveRates {
 }
 
 func (l *liveRates) set(t rates.Table) { l.current.Store(t) }
-func (l *liveRates) Price(model string, promptTokens, outputTokens int) float64 {
-	return l.current.Load().(rates.Table).Price(model, promptTokens, outputTokens)
+func (l *liveRates) Price(model string, u rates.Usage) float64 {
+	return l.current.Load().(rates.Table).Price(model, u)
 }
-func (l *liveRates) Counterfactual(promptTokens, outputTokens int) float64 {
-	return l.current.Load().(rates.Table).Counterfactual(promptTokens, outputTokens)
+func (l *liveRates) Counterfactual(u rates.Usage) float64 {
+	return l.current.Load().(rates.Table).Counterfactual(u)
 }
 func (l *liveRates) HasCounterfactual() bool {
 	return l.current.Load().(rates.Table).HasCounterfactual()

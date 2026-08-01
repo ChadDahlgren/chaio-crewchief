@@ -48,6 +48,16 @@ type StatsTotalsView struct {
 	// `counterfactual:` block — i.e. counterfactual_usd and savings_pct
 	// carry no information at all rather than reporting a measured zero.
 	CounterfactualConfigured bool `json:"counterfactual_configured"`
+	// ReasoningTokens is billable output providers generated but excluded from
+	// output_tokens. Reported separately so a client can see how much of the
+	// spend it accounts for.
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+	// ProviderCostUSD sums the vendor's own cost over attempts that reported
+	// one; ProviderCostAttempts counts them. Together they let a client verify
+	// cost_usd rather than take it on faith, and say how much of the window the
+	// verification actually covers.
+	ProviderCostUSD      float64 `json:"provider_cost_usd"`
+	ProviderCostAttempts int     `json:"provider_cost_attempts"`
 }
 
 func sanitizeLogField(s string) string {
@@ -194,14 +204,25 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 		}
 
 		view := StatsTotalsView{
-			Attempts:     totals.Attempts,
-			PromptTokens: totals.PromptTokens,
-			OutputTokens: totals.OutputTokens,
-			CostUSD:      totals.CostUSD,
+			Attempts:             totals.Attempts,
+			PromptTokens:         totals.PromptTokens,
+			OutputTokens:         totals.OutputTokens,
+			CostUSD:              totals.CostUSD,
+			ReasoningTokens:      totals.ReasoningTokens,
+			ProviderCostUSD:      totals.ProviderCostUSD,
+			ProviderCostAttempts: totals.ProviderCostAttempts,
 		}
 		if rt != nil {
 			view.CounterfactualConfigured = rt.HasCounterfactual()
-			view.CounterfactualUSD = rt.Counterfactual(int(totals.PromptTokens), int(totals.OutputTokens))
+			view.CounterfactualUSD = rt.Counterfactual(rates.Usage{
+				PromptTokens: int(totals.PromptTokens),
+				OutputTokens: int(totals.OutputTokens),
+				// Reasoning tokens count against the counterfactual too: the
+				// frontier model would have had to generate them as well.
+				// Cached tokens are deliberately not passed — Counterfactual
+				// prices all input at the full frontier rate.
+				ReasoningTokens: int(totals.ReasoningTokens),
+			})
 		}
 		if view.CounterfactualUSD > 0 {
 			view.SavingsPct = 1 - view.CostUSD/view.CounterfactualUSD
