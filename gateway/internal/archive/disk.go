@@ -56,8 +56,11 @@ func (d *Disk) Put(ctx context.Context, blob []byte) (string, error) {
 	}
 
 	if _, err := f.Write(blob); err != nil {
-		f.Close()
+		closeErr := f.Close()
 		os.Remove(tmpPath)
+		if closeErr != nil {
+			return "", fmt.Errorf("failed to write to temp file %q: %v; additionally failed to close temp file: %w", tmpPath, err, closeErr)
+		}
 		return "", fmt.Errorf("failed to write to temp file %q: %w", tmpPath, err)
 	}
 	if err := f.Close(); err != nil {
