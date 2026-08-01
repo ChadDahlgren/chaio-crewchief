@@ -1,8 +1,9 @@
 {
   "name": "chaio-crewchief",
   "displayName": "Hybrid Model Fleet",
-  "version": "0.5.0",
-  "description": "Delegate coding work to a local + cloud model fleet and price every attempt against a frontier counterfactual. Runs in-process by default — no server to start. Fleet agents, MCP tools, status/delegate/usage skills, cost ledger.",
+  "version": "0.6.2",
+  "hooks": "./hooks/hooks.json",
+  "description": "Delegate coding work to a local + cloud model fleet and price every attempt against a frontier counterfactual. Runs in-process by default — no server to start. Fleet agents, MCP tools, status/delegate/usage skills, cost ledger, and hooks that keep delegation active instead of advisory.",
   "author": {
     "name": "Chad Dahlgren",
     "email": "me@chad-dahlgren.com"
