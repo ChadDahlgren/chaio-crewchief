@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue builds each PR against the tip it will actually land on, so
+  # the required checks have to run here too. Without this trigger a queued PR
+  # waits forever on checks that never start.
+  merge_group:
 
 permissions:
   contents: read
