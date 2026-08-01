@@ -77,7 +77,9 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 				// ("record request in ledger: ...") reached nobody, leaving a
 				// ledger-write abort indistinguishable from any other 500. The
 				// body stays generic; internals go to the log, not the client.
-				log.Printf("delegation failed: %v", err)
+				safeErr := strings.ReplaceAll(err.Error(), "\n", "")
+				safeErr = strings.ReplaceAll(safeErr, "\r", "")
+				log.Printf("delegation failed: %s", safeErr)
 				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 				return
 			}
