@@ -107,17 +107,30 @@ homebrew_casks:
     zap:
       trash:
         - "~/.chaio-crewchief"
+    # This is the first thing a new install reads, so it has to match how the
+    # binary actually works. It previously told users to curl
+    # gateway/models.yaml from the repo — that is the EXAMPLE roster, whose
+    # presets point at endpoints a new user does not have, so `doctor` reported
+    # everything unhealthy on first run. It also told them to run `serve`, which
+    # the embedded MCP gateway made unnecessary in v0.5.0.
     caveats: |
-      Crew Chief needs a model roster before it can do anything:
+      Crew Chief needs a model roster before it can do anything. An empty or
+      missing roster is not an error — it makes every delegation refuse, which
+      reads as "delegation is broken".
 
-        mkdir -p ~/.chaio-crewchief && cd ~/.chaio-crewchief
-        curl -fsSLO https://raw.githubusercontent.com/ChadDahlgren/chaio-crewchief/main/gateway/models.yaml
-        chaio-crewchief doctor      # what's misconfigured?
-        chaio-crewchief serve       # binds 127.0.0.1:8181
+        chaio-crewchief init        # writes ~/.chaio-crewchief/models.yaml
+                                    # then edit it: uncomment a preset and
+                                    # point it at a real endpoint
+        chaio-crewchief models      # what is configured?
+        chaio-crewchief doctor      # what is reachable?
 
-      serve binds loopback by default. It has NO authentication and reads
-      provider API keys from its environment, so anyone who can reach the
-      port can spend them. Use --addr :8181 only on a trusted network.
+      There is no server to run: the Claude Code plugin starts an embedded
+      gateway for the session and shuts it down with it.
+
+      `chaio-crewchief serve` is only for a shared or long-running gateway. It
+      binds loopback, has NO authentication, and reads provider API keys from
+      its environment, so anyone who can reach the port can spend them. Use
+      --addr :8181 only on a trusted network.
 
 release:
   draft: false
