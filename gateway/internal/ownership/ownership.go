@@ -136,7 +136,7 @@ func (o *Owner) Release() error {
 // come to check it, so its abandoned rows read as live and stay `running`
 // forever, unfixable by any later run. Reaping first sees the file unlocked and
 // correctly calls it dead.
-func OwnerAlive(lockDir string, pid int) (bool, error) {
+func OwnerAlive(lockDir string, pid int) (alive bool, retErr error) {
 	if _, err := os.Stat(lockDir); err != nil {
 		// Cannot tell "this pid never had a lock here" from "this directory
 		// was never the right one to ask." Either way, unsure means alive.
@@ -151,7 +151,11 @@ func OwnerAlive(lockDir string, pid int) (bool, error) {
 		}
 		return true, fmt.Errorf("open lock file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); retErr == nil && cerr != nil {
+			retErr = fmt.Errorf("close lock file: %w", cerr)
+		}
+	}()
 
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return true, nil // held by a live process
