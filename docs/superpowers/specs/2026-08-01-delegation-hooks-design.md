@@ -131,6 +131,7 @@ otherwise.
 | 5 | Content exceeds **120 lines** | `wc -l` on content |
 | 6 | Extension is a code extension (`.go .py .ts .tsx .js .rs .java .rb .c .cpp .cs .sh`) — never `.md`, `.yaml`, `.json`, lock files | suffix match |
 | 7 | No `delivered` request in the ledger in the last 10 minutes | SQLite query |
+| 8 | The registry has at least one usable preset | grep `models.yaml` |
 
 Every condition is decidable by a shell script with no semantic judgment. That is
 what makes the gate reliable, and it is why the trigger is *file shape* rather than
@@ -154,6 +155,29 @@ are correct and they bound the same region from opposite sides:
 
 The denial message covers both responses so the model is not pushed toward
 delegating an oversized unit that will fail.
+
+### Condition 8 exists to prevent a worse deadlock
+
+Found empirically while wiring up a Grok preset: the operator's
+`~/.chaio-crewchief/models.yaml` **did not exist**. `init` had never been run, so
+the roster was empty and *every* delegation would have refused — the gateway
+declines to relay when no preset resolves.
+
+Without condition 8 the gate denies the write and instructs the model to
+delegate, delegation refuses because there is no roster, and the model is stuck
+with no legal path forward. That is a strictly worse failure than the one this
+design exists to fix, and it lands on exactly the population most likely to hit
+it: someone who just installed the plugin.
+
+The check must be cheap enough for a `PreToolUse` hook, which rules out
+`chaio-crewchief doctor` — it performs live health probes against every
+configured endpoint (a real network round trip per preset). Instead, scan the
+resolved `models.yaml` for at least one uncommented `- name:` entry. Missing
+file, `models: []`, or an all-commented starter file all mean "no fleet," and the
+gate stands down.
+
+This also means the gate activates on its own the moment a roster is configured —
+no separate enable step.
 
 ### Condition 7 exists to prevent a deadlock
 
@@ -254,6 +278,8 @@ Cases, one per condition plus the interesting combinations:
 9. `chaio-crewchief` not on `PATH` → allow
 10. Malformed JSON on stdin → allow, exit 0
 11. `sqlite3` unavailable → allow, exit 0
+12. `models.yaml` absent → allow (no fleet configured)
+13. `models.yaml` present but every preset commented out → allow
 
 Cases 4 and 6 are the only denials; everything else proves the gate stays out of
 the way. Fixtures build a throwaway SQLite file with the real `requests` schema.
