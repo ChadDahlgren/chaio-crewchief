@@ -41,6 +41,14 @@ type statsResp struct {
 		// savingsLine, which checks the amount before the flag so that
 		// case is not misreported.
 		CounterfactualConfigured bool `json:"counterfactual_configured"`
+		// ReasoningTokens is billable output the provider generated but did not
+		// count in OutputTokens. Absent (0) on a pre-0.6 gateway.
+		ReasoningTokens int64 `json:"reasoning_tokens"`
+		// ProviderCostUSD sums the vendor's own cost figure over the attempts
+		// that reported one; ProviderCostAttempts counts them, so the line can
+		// say "N of M" rather than implying full coverage.
+		ProviderCostUSD      float64 `json:"provider_cost_usd"`
+		ProviderCostAttempts int     `json:"provider_cost_attempts"`
 	} `json:"totals"`
 }
 
@@ -90,12 +98,66 @@ func RenderUsage(s statsResp) string {
 	}
 	t := s.Totals
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "attempts: %d   tokens: %s in / %s out\n", t.Attempts, thousands(t.PromptTokens), thousands(t.OutputTokens))
+	if t.ReasoningTokens > 0 {
+		// Broken out rather than folded into "out": reasoning is billable
+		// output the provider excluded from completion_tokens, and on reasoning
+		// models it routinely dwarfs the visible answer. Hiding it inside one
+		// number is what made the ledger under-price these attempts.
+		fmt.Fprintf(&b, "attempts: %d   tokens: %s in / %s out (+%s reasoning)\n",
+			t.Attempts, thousands(t.PromptTokens), thousands(t.OutputTokens), thousands(t.ReasoningTokens))
+	} else {
+		fmt.Fprintf(&b, "attempts: %d   tokens: %s in / %s out\n", t.Attempts, thousands(t.PromptTokens), thousands(t.OutputTokens))
+	}
 	fmt.Fprintf(&b, "spend:    %s\n", money(t.CostUSD))
+	b.WriteString(providerCostLine(s))
 	fmt.Fprintf(&b, "frontier counterfactual: %s\n", money(t.CounterfactualUSD))
 	b.WriteString(savingsLine(s))
 	return b.String()
 }
+
+// providerCostLine reports the vendor's own billing figure next to the modeled
+// spend, and flags when they disagree materially.
+//
+// Sustained divergence means rates.yaml no longer matches what the vendor
+// charges — the failure the reasoning-token undercount was an instance of. It
+// renders nothing when no attempt reported a cost, which is the normal case for
+// a purely local fleet.
+func providerCostLine(s statsResp) string {
+	t := s.Totals
+	if t.ProviderCostAttempts == 0 || t.ProviderCostUSD <= 0 {
+		return ""
+	}
+	if !finite(t.ProviderCostUSD) || !finite(t.CostUSD) {
+		return "provider: n/a — the reported totals are not a usable number\n"
+	}
+
+	coverage := fmt.Sprintf("%d of %d attempts", t.ProviderCostAttempts, t.Attempts)
+
+	// With partial coverage the two figures measure different sets of attempts,
+	// so a percentage between them would be meaningless — report both plainly.
+	if t.ProviderCostAttempts != t.Attempts {
+		return fmt.Sprintf("provider: %s reported (%s; not directly comparable to spend)\n",
+			money(t.ProviderCostUSD), coverage)
+	}
+
+	delta := t.CostUSD - t.ProviderCostUSD
+	pct := delta / t.ProviderCostUSD * 100
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta > driftFloorUSD && (pct > driftPct*100 || pct < -driftPct*100) {
+		return fmt.Sprintf("provider: %s reported (%s) — modeled spend is off by %+.1f%%; rates.yaml may be stale\n",
+			money(t.ProviderCostUSD), coverage, pct)
+	}
+	return fmt.Sprintf("provider: %s reported (%s, %+.1f%%)\n", money(t.ProviderCostUSD), coverage, pct)
+}
+
+// Verification thresholds, matched to internal/engine's write-time check so the
+// report and the log agree on what counts as drift.
+const (
+	driftPct      = 0.05
+	driftFloorUSD = 0.0001
+)
 
 // savingsLine renders the headline number. It is the product, so it refuses to
 // state anything it cannot support: no frontier reference rate means there is

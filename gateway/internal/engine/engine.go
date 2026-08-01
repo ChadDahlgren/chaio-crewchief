@@ -26,9 +26,44 @@ var codeBlockRegex = regexp.MustCompile("(?s)```[a-zA-Z0-9_+-]*\\n(.*?)```")
 // (e.g. existing tests, or a deployment with no rates.yaml).
 type noopRates struct{}
 
-func (noopRates) Price(model string, promptTokens, outputTokens int) float64 { return 0 }
-func (noopRates) Counterfactual(promptTokens, outputTokens int) float64      { return 0 }
-func (noopRates) HasCounterfactual() bool                                    { return false }
+func (noopRates) Price(model string, u rates.Usage) float64 { return 0 }
+func (noopRates) Counterfactual(u rates.Usage) float64      { return 0 }
+func (noopRates) HasCounterfactual() bool                   { return false }
+
+// Cost-verification thresholds. A provider-reported cost that diverges from the
+// modeled price by more than driftPct AND more than driftFloorUSD means
+// rates.yaml no longer matches what the vendor is charging.
+//
+// The absolute floor exists because a sub-cent attempt clears a percentage
+// threshold on rounding alone, and a warning that fires on every trivial call
+// is one nobody reads.
+const (
+	driftPct      = 0.05
+	driftFloorUSD = 0.0001
+)
+
+// checkCostDrift compares the modeled price against the provider's own figure
+// and returns a warning string when they disagree materially, or "" otherwise.
+//
+// Pure so it can be tested without a provider; the caller decides whether to
+// log. Verification never fails an attempt — the relay already succeeded, and
+// an accounting disagreement is not the caller's problem.
+func checkCostDrift(model string, modeled, provider float64) string {
+	if provider <= 0 || modeled <= 0 {
+		return "" // provider reported nothing, or the model is priced as local
+	}
+	delta := modeled - provider
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta <= driftFloorUSD || delta/provider <= driftPct {
+		return ""
+	}
+	return fmt.Sprintf(
+		"cost drift for preset %q: modeled $%.6f vs provider-reported $%.6f (%.1f%%); rates.yaml may be stale",
+		model, modeled, provider, delta/provider*100,
+	)
+}
 
 // noopRouter never resolves anything, so every request falls back to the
 // registry default. Used when the deployment has no routing.yaml.
@@ -232,9 +267,20 @@ func (e *Engine) attempt(ctx context.Context, reqID string, preset types.Preset,
 	}
 
 	a.PromptTokens = resp.PromptTokens
+	a.CachedPromptTokens = resp.CachedPromptTokens
 	a.OutputTokens = resp.OutputTokens
+	a.ReasoningTokens = resp.ReasoningTokens
+	a.ProviderCostUSD = resp.ProviderCostUSD
 	a.TokPerSec = resp.TokPerSec
-	a.CostUSD = e.rates.Price(preset.Name, resp.PromptTokens, resp.OutputTokens)
+	a.CostUSD = e.rates.Price(preset.Name, rates.Usage{
+		PromptTokens:       resp.PromptTokens,
+		CachedPromptTokens: resp.CachedPromptTokens,
+		OutputTokens:       resp.OutputTokens,
+		ReasoningTokens:    resp.ReasoningTokens,
+	})
+	if warn := checkCostDrift(preset.Name, a.CostUSD, a.ProviderCostUSD); warn != "" {
+		log.Printf("warning: %s", warn)
+	}
 	if respRef, rerr := e.arch.Put(ctx, resp.Raw); rerr == nil {
 		a.ResponseRef = respRef
 	}

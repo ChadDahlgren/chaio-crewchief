@@ -34,11 +34,11 @@ counterfactual:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got := tbl.Price("gpt-oss-120b", 1_000_000, 1_000_000); got != 0 {
+	if got := tbl.Price("gpt-oss-120b", Usage{PromptTokens: 1_000_000, OutputTokens: 1_000_000}); got != 0 {
 		t.Fatalf("local price = %v, want 0", got)
 	}
 
-	got := tbl.Price("bedrock-qwen", 1_000_000, 500_000)
+	got := tbl.Price("bedrock-qwen", Usage{PromptTokens: 1_000_000, OutputTokens: 500_000})
 	want := 1.0 + 1.0 // 1M input @ $1/Mtok + 0.5M output @ $2/Mtok
 	if got != want {
 		t.Fatalf("price = %v, want %v", got, want)
@@ -56,7 +56,7 @@ models:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := tbl.Price("unknown-model", 1_000_000, 1_000_000); got != 0 {
+	if got := tbl.Price("unknown-model", Usage{PromptTokens: 1_000_000, OutputTokens: 1_000_000}); got != 0 {
 		t.Fatalf("price for unknown model = %v, want 0", got)
 	}
 }
@@ -72,7 +72,7 @@ counterfactual:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	got := tbl.Counterfactual(2_000_000, 1_000_000)
+	got := tbl.Counterfactual(Usage{PromptTokens: 2_000_000, OutputTokens: 1_000_000})
 	want := 2*3.0 + 1*15.0
 	if got != want {
 		t.Fatalf("counterfactual = %v, want %v", got, want)
@@ -84,10 +84,10 @@ func TestLoadMissingFileIsAllZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := tbl.Price("anything", 1_000_000, 1_000_000); got != 0 {
+	if got := tbl.Price("anything", Usage{PromptTokens: 1_000_000, OutputTokens: 1_000_000}); got != 0 {
 		t.Fatalf("price = %v, want 0", got)
 	}
-	if got := tbl.Counterfactual(1_000_000, 1_000_000); got != 0 {
+	if got := tbl.Counterfactual(Usage{PromptTokens: 1_000_000, OutputTokens: 1_000_000}); got != 0 {
 		t.Fatalf("counterfactual = %v, want 0", got)
 	}
 }

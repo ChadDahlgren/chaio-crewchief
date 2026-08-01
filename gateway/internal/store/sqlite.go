@@ -136,6 +136,28 @@ var migrations = []migration{
 			return nil
 		},
 	},
+	{
+		// Cost accuracy: cached and reasoning token counts, plus the provider's
+		// own cost figure for verification.
+		//
+		// Purely additive, defaulting to 0, so rows written before this price
+		// exactly as they always did. Nothing is backfilled — cost_usd is
+		// priced at write time and never recomputed, so attempts recorded
+		// before this migration keep their old (reasoning-blind) prices.
+		version: 5,
+		up: func(ctx context.Context, tx execer) error {
+			for _, stmt := range []string{
+				`ALTER TABLE attempts ADD COLUMN cached_prompt_tokens INTEGER NOT NULL DEFAULT 0`,
+				`ALTER TABLE attempts ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0`,
+				`ALTER TABLE attempts ADD COLUMN provider_cost_usd REAL NOT NULL DEFAULT 0`,
+			} {
+				if err := addColumn(ctx, tx, "add cost accuracy columns", stmt); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
 }
 
 // applyMigrations brings the database up to the highest known version.
@@ -437,8 +459,8 @@ func (s *SQLite) GetRequest(ctx context.Context, id string) (types.RequestRecord
 
 func (s *SQLite) RecordAttempt(ctx context.Context, a types.Attempt) error {
 	query := `INSERT INTO attempts (
-		id, request_id, stage, model, started_at, wall_ms, prompt_tokens, output_tokens, tok_per_sec, verdict, verdict_info, prompt_ref, response_ref, artifact_ref, provider_class, cost_usd
-	) VALUES (?, ?, 'attempt', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		id, request_id, stage, model, started_at, wall_ms, prompt_tokens, output_tokens, tok_per_sec, verdict, verdict_info, prompt_ref, response_ref, artifact_ref, provider_class, cost_usd, cached_prompt_tokens, reasoning_tokens, provider_cost_usd
+	) VALUES (?, ?, 'attempt', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	providerClass := a.ProviderClass
 	if providerClass == "" {
 		providerClass = "local"
@@ -447,6 +469,7 @@ func (s *SQLite) RecordAttempt(ctx context.Context, a types.Attempt) error {
 		a.ID, a.RequestID, a.Model, a.StartedAt.Format(time.RFC3339),
 		a.WallMS, a.PromptTokens, a.OutputTokens, a.TokPerSec, a.Outcome, a.Error,
 		a.PromptRef, a.ResponseRef, a.ArtifactRef, providerClass, a.CostUSD,
+		a.CachedPromptTokens, a.ReasoningTokens, a.ProviderCostUSD,
 	)
 	return err
 }
@@ -455,7 +478,15 @@ func (s *SQLite) GetAttempt(ctx context.Context, id string) (types.Attempt, bool
 	if s.db == nil {
 		return types.Attempt{}, false, fmt.Errorf("database not initialized")
 	}
-	query := `SELECT id, request_id, model, started_at, wall_ms, prompt_tokens, output_tokens, tok_per_sec, verdict, verdict_info, prompt_ref, response_ref, artifact_ref, provider_class, cost_usd FROM attempts WHERE id = ?`
+	// verdict_info, prompt_ref, response_ref and artifact_ref are nullable in the
+	// schema but scanned into plain strings. RecordAttempt always supplies them,
+	// so rows this binary wrote are safe — but a row inserted by a restore, a
+	// manual fixup, or an older tool can hold NULL, and scanning that into a
+	// string fails the whole read. COALESCE makes the read total.
+	query := `SELECT id, request_id, model, started_at, wall_ms, prompt_tokens, output_tokens, tok_per_sec, verdict,
+	                 COALESCE(verdict_info, ''), COALESCE(prompt_ref, ''), COALESCE(response_ref, ''), COALESCE(artifact_ref, ''),
+	                 provider_class, cost_usd, cached_prompt_tokens, reasoning_tokens, provider_cost_usd
+	          FROM attempts WHERE id = ?`
 	var a types.Attempt
 	var startedAtStr string
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
@@ -463,6 +494,7 @@ func (s *SQLite) GetAttempt(ctx context.Context, id string) (types.Attempt, bool
 		&a.WallMS, &a.PromptTokens, &a.OutputTokens, &a.TokPerSec,
 		&a.Outcome, &a.Error, &a.PromptRef, &a.ResponseRef, &a.ArtifactRef,
 		&a.ProviderClass, &a.CostUSD,
+		&a.CachedPromptTokens, &a.ReasoningTokens, &a.ProviderCostUSD,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -482,7 +514,9 @@ func (s *SQLite) QueryAttempts(ctx context.Context, f types.AttemptFilter) ([]ty
 	var args []interface{}
 
 	baseQuery := `
-		SELECT a.id, a.request_id, a.model, a.started_at, a.wall_ms, a.prompt_tokens, a.output_tokens, a.tok_per_sec, a.verdict, a.verdict_info, a.prompt_ref, a.response_ref, a.artifact_ref, a.provider_class, a.cost_usd
+		SELECT a.id, a.request_id, a.model, a.started_at, a.wall_ms, a.prompt_tokens, a.output_tokens, a.tok_per_sec, a.verdict,
+		       COALESCE(a.verdict_info, ''), COALESCE(a.prompt_ref, ''), COALESCE(a.response_ref, ''), COALESCE(a.artifact_ref, ''),
+		       a.provider_class, a.cost_usd, a.cached_prompt_tokens, a.reasoning_tokens, a.provider_cost_usd
 		FROM attempts a
 		LEFT JOIN requests r ON a.request_id = r.id
 	`
@@ -531,6 +565,7 @@ func (s *SQLite) QueryAttempts(ctx context.Context, f types.AttemptFilter) ([]ty
 			&a.WallMS, &a.PromptTokens, &a.OutputTokens, &a.TokPerSec,
 			&a.Outcome, &a.Error, &a.PromptRef, &a.ResponseRef, &a.ArtifactRef,
 			&a.ProviderClass, &a.CostUSD,
+			&a.CachedPromptTokens, &a.ReasoningTokens, &a.ProviderCostUSD,
 		)
 		if err != nil {
 			return nil, err
@@ -572,12 +607,26 @@ func (s *SQLite) Stats(ctx context.Context) ([]types.StatRow, error) {
 }
 
 func (s *SQLite) StatsTotals(ctx context.Context) (types.StatsTotals, error) {
+	// provider_cost_usd is summed alongside a count of the attempts that
+	// actually carried one, so a caller can report "N of M attempts" rather
+	// than implying the sum covers every attempt in the window.
 	query := `
-		SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cost_usd), 0)
+		SELECT COUNT(*),
+		       COALESCE(SUM(prompt_tokens), 0),
+		       COALESCE(SUM(cached_prompt_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(reasoning_tokens), 0),
+		       COALESCE(SUM(cost_usd), 0),
+		       COALESCE(SUM(provider_cost_usd), 0),
+		       COALESCE(SUM(CASE WHEN provider_cost_usd > 0 THEN 1 ELSE 0 END), 0)
 		FROM attempts
 	`
 	var t types.StatsTotals
-	err := s.db.QueryRowContext(ctx, query).Scan(&t.Attempts, &t.PromptTokens, &t.OutputTokens, &t.CostUSD)
+	err := s.db.QueryRowContext(ctx, query).Scan(
+		&t.Attempts, &t.PromptTokens, &t.CachedPromptTokens,
+		&t.OutputTokens, &t.ReasoningTokens, &t.CostUSD,
+		&t.ProviderCostUSD, &t.ProviderCostAttempts,
+	)
 	if err != nil {
 		return types.StatsTotals{}, err
 	}
