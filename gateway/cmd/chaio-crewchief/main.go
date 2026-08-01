@@ -111,11 +111,26 @@ func main() {
 			os.Exit(cli.Doctor(os.Stdout, os.Args[2:]))
 		case "usage":
 			os.Exit(cli.Usage(os.Stdout, os.Args[2:]))
+		case "models":
+			os.Exit(cli.Models(os.Stdout, os.Args[2:]))
 		case "version", "--version", "-v":
 			fmt.Printf("%s %s\n", serviceName, version)
 			return
 		case "serve":
 			os.Args = append(os.Args[:1], os.Args[2:]...)
+		default:
+			// A bare `chaio-crewchief [flags]` must keep serving so existing
+			// systemd units don't break, so anything flag-shaped falls through
+			// to serve(). A bare word is a mistyped subcommand: without this
+			// branch it also fell through, and `chaio-crewchief modles` would
+			// try to start a server — succeeding, and binding a port, whenever
+			// the working directory happened to contain a models.yaml.
+			if !strings.HasPrefix(args[0], "-") {
+				fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", args[0])
+				fmt.Fprintf(os.Stderr, "usage: %s <serve|mcp|init|doctor|usage|models|version> [flags]\n", serviceName)
+				fmt.Fprintf(os.Stderr, "       %s [flags]   (serves; equivalent to `serve`)\n", serviceName)
+				os.Exit(2)
+			}
 		}
 	}
 	serve()

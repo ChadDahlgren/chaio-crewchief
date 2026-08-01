@@ -71,12 +71,15 @@ func Acquire(lockDir string) (*Owner, error) {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		closeErr := f.Close()
 		// Either a genuinely live process already holds this pid's lock, or
 		// this same process called Acquire twice: flock conflicts across
 		// separate descriptors within one process, which is what the
 		// self-alive test relies on. A stale file left by a dead owner flocks
 		// successfully, so it cannot produce this error.
+		if closeErr != nil {
+			return nil, fmt.Errorf("lock %s: %w (also failed to close lock file: %v)", path, err, closeErr)
+		}
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	return &Owner{pid: pid, path: path, f: f}, nil
