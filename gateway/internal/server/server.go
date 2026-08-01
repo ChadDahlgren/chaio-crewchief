@@ -50,6 +50,12 @@ type StatsTotalsView struct {
 	CounterfactualConfigured bool `json:"counterfactual_configured"`
 }
 
+func sanitizeLogField(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
+}
+
 // New wires the HTTP handler. rt may be nil, in which case counterfactual_usd
 // and savings_pct are always 0 and counterfactual_configured is false; the same
 // holds for a non-nil table with no `counterfactual:` block.
@@ -97,7 +103,7 @@ func New(eng Engine, store types.Store, reg types.Registry, arch types.Archiver,
 				// if the ledger is what broke, this fails too, and the log line
 				// is then the only surviving trace.
 				if _, err := eng.RunWithID(context.Background(), reqID, req); err != nil {
-					log.Printf("async delegation %s failed before recording a result: %v", reqID, err)
+					log.Printf("async delegation %s failed before recording a result: %s", reqID, sanitizeLogField(err.Error()))
 					if _, found, gerr := store.GetRequest(context.Background(), reqID); gerr == nil && !found {
 						_ = store.RecordRequest(context.Background(), reqID, req, types.StatusFailed)
 					}
