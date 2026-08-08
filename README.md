@@ -55,20 +55,20 @@ brew tap ChadDahlgren/tap
 brew install chaio-crewchief
 
 # Linux (or macOS without Homebrew) — verifies the published checksum
-curl -fsSL https://raw.githubusercontent.com/ChadDahlgren/chaio-crewchief/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/chaio-dev/chaio-crewchief/main/scripts/install.sh | sh
 
 # from source
 go install github.com/ChadDahlgren/chaio-crewchief/gateway/cmd/chaio-crewchief@latest
 ```
 
 Prebuilt binaries for linux and darwin on amd64 and arm64 are attached to
-every [release](https://github.com/ChadDahlgren/chaio-crewchief/releases),
+every [release](https://github.com/chaio-dev/chaio-crewchief/releases),
 with a `checksums.txt` alongside them.
 
 **2. Add the plugin.**
 
 ```bash
-claude plugin marketplace add ChadDahlgren/chaio-crewchief
+claude plugin marketplace add chaio-dev/chaio-crewchief
 claude plugin install chaio-crewchief
 ```
 
@@ -93,7 +93,7 @@ Then, if you want the cost ledger to report savings at all, add a rates file —
 is no counterfactual, and `usage` reports `savings: n/a`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChadDahlgren/chaio-crewchief/main/gateway/rates.yaml \
+curl -fsSL https://raw.githubusercontent.com/chaio-dev/chaio-crewchief/main/gateway/rates.yaml \
   -o ~/.chaio-crewchief/rates.yaml
 $EDITOR ~/.chaio-crewchief/rates.yaml
 ```
@@ -211,7 +211,7 @@ no `solved`, no partial credit — Crew Chief doesn't know enough to offer one.
 `routing.yaml` (a plain data lookup — see [`routing.yaml`](gateway/routing.yaml)),
 or omit both for the registry default. Crew Chief never infers which model
 is "best"; that table is something you maintain, informed by
-[chaio-bench](https://github.com/ChadDahlgren/chaio-bench).
+[chaio-bench](https://github.com/chaio-dev/chaio-bench).
 
 Model grading lives in that separate repository: it scores candidate models
 against a fixed Python/React/Angular suite so you can decide what belongs in

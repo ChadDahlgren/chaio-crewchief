@@ -85,7 +85,7 @@ homebrew_casks:
       # GITHUB_TOKEN is scoped to one repository and cannot write to the tap.
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
-    homepage: "https://github.com/ChadDahlgren/chaio-crewchief"
+    homepage: "https://github.com/chaio-dev/chaio-crewchief"
     description: "A deliberately simple, fast, cheap phonebook between your frontier model and a fleet of cheap ones — with a cost ledger"
     license: "Apache-2.0"
     commit_author:

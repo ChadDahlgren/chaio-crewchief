@@ -56,10 +56,10 @@ artifact yourself, same as exercise 2 — Crew Chief still isn't judging.
 
 ## 5. Score a new model (optional, ~10 min)
 > Separate tool, separate repository:
-> [chaio-bench](https://github.com/ChadDahlgren/chaio-bench)
+> [chaio-bench](https://github.com/chaio-dev/chaio-bench)
 >
 > ```bash
-> git clone https://github.com/ChadDahlgren/chaio-bench && cd chaio-bench
+> git clone https://github.com/chaio-dev/chaio-bench && cd chaio-bench
 > python3 runner.py --models <preset> --smoke
 > ```
 
