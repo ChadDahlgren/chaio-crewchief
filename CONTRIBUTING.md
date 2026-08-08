@@ -25,7 +25,7 @@ looks wrong. **Those will be declined.** Two reasons, both load-bearing:
 operator maintains. Inferring "the best model for this" belongs in the caller,
 not here.
 
-If you want output graded, that's [chaio-bench](https://github.com/ChadDahlgren/chaio-bench)
+If you want output graded, that's [chaio-bench](https://github.com/chaio-dev/chaio-bench)
 — a separate, offline tool for deciding what goes in your routing table.
 
 None of this means the boundary can never move. It means moving it is a design
@@ -36,7 +36,7 @@ conversation in an issue, not a surprise in a diff.
 The Go module lives in `gateway/`, not the repository root.
 
 ```bash
-git clone https://github.com/ChadDahlgren/chaio-crewchief
+git clone https://github.com/chaio-dev/chaio-crewchief
 cd chaio-crewchief/gateway
 
 go build -o chaio-crewchief ./cmd/chaio-crewchief

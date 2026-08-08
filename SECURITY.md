@@ -71,7 +71,7 @@ Other properties worth knowing:
 **Do not open a public issue.**
 
 Report privately through GitHub's
-[private vulnerability reporting](https://github.com/ChadDahlgren/chaio-crewchief/security/advisories/new)
+[private vulnerability reporting](https://github.com/chaio-dev/chaio-crewchief/security/advisories/new)
 — the "Report a vulnerability" button under the Security tab. That opens a
 channel visible only to the maintainer.
 
